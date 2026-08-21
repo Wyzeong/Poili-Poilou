@@ -2,7 +2,7 @@
    Vues : Accueil / Agenda / Clients / Fiche client / Paramètres
    Toute la donnée passe par DB (db.js → IndexedDB). */
 
-const APP_VERSION = "1.0.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
+const APP_VERSION = "1.2.2"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
 
 const JOURS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
 const JOURS_COURT = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
@@ -12,17 +12,15 @@ const DOMICILE_ADRESSE = "41 avenue Maréchal Foch, 76290 Montivilliers";
 
 const state = {
   view: "accueil",
-  weekStart: startOfWeek(new Date()),
+  weekStart: startOfDay(new Date()),
   clientId: null,
   clientSearch: "",
   agendaSearch: "",
 };
 
 // ---------- Utilitaires date ----------
-function startOfWeek(d) {
+function startOfDay(d) {
   const date = new Date(d);
-  const day = (date.getDay() + 6) % 7; // lundi = 0
-  date.setDate(date.getDate() - day);
   date.setHours(0, 0, 0, 0);
   return date;
 }
@@ -188,7 +186,7 @@ async function refreshAgendaBody() {
     container.innerHTML = await renderAgendaSearchHtml(state.agendaSearch.trim());
     container.querySelectorAll("[data-goto-date]").forEach((el) => {
       el.onclick = () => {
-        state.weekStart = startOfWeek(new Date(el.dataset.gotoDate));
+        state.weekStart = startOfDay(new Date(el.dataset.gotoDate));
         state.agendaSearch = "";
         const input = document.getElementById("agenda-search");
         if (input) input.value = "";
@@ -217,6 +215,12 @@ async function refreshAgendaBody() {
       <button id="week-next" aria-label="Semaine suivante">
         <svg viewBox="0 0 24 24" width="18" height="18"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M9 6l6 6-6 6"/></svg>
       </button>
+      <span class="week-jump-wrap">
+        <button id="week-jump-btn" class="week-jump-btn" aria-label="Aller à une date">
+          <svg viewBox="0 0 24 24" width="17" height="17"><path fill="currentColor" d="M7 2v2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-2V2h-2v2H9V2H7zM5 9h14v11H5V9z"/></svg>
+        </button>
+        <input type="date" id="week-jump-input" class="week-jump-input" value="${toISO(days[0])}" />
+      </span>
     </div>
     <div class="week-grid">
   `;
@@ -225,13 +229,14 @@ async function refreshAgendaBody() {
     const iso = toISO(d);
     const isToday = isSameDay(d, today);
     const items = (byDate[iso] || []).slice().sort((a, b) => (a.ordre ?? 0) - (b.ordre ?? 0));
+    const pendingCount = items.filter((r) => r.statut !== "honore").length;
 
     html += `<div class="day-col ${isToday ? "is-today" : ""}">
       <div class="day-col-head">
         <div class="dow">${JOURS_COURT[(d.getDay() + 6) % 7]}</div>
         <div class="dnum">${d.getDate()}</div>
       </div>
-      ${items.length >= 2 ? `<button class="day-col-optimize" data-optimize="${iso}">
+      ${pendingCount >= 2 ? `<button class="day-col-optimize" data-optimize="${iso}">
         <svg viewBox="0 0 24 24" width="13" height="13"><path fill="currentColor" d="M12 2c1 3-1 4-1 6 0 1.2 1 2 2 2 1.3 0 2-1 2-2.2 1.6 1.4 3 3.7 3 6.2a6 6 0 0 1-12 0c0-2.6 1.1-4.3 2.3-6C9.2 6.3 10.5 4.4 12 2Z"/></svg>
         Optimiser
       </button>` : ""}
@@ -246,7 +251,14 @@ async function refreshAgendaBody() {
 
   document.getElementById("week-prev").onclick = () => { state.weekStart = addDays(state.weekStart, -7); refreshAgendaBody(); };
   document.getElementById("week-next").onclick = () => { state.weekStart = addDays(state.weekStart, 7); refreshAgendaBody(); };
-  document.getElementById("week-today").onclick = () => { state.weekStart = startOfWeek(new Date()); refreshAgendaBody(); };
+  document.getElementById("week-today").onclick = () => { state.weekStart = startOfDay(new Date()); refreshAgendaBody(); };
+  const jumpInput = document.getElementById("week-jump-input");
+  document.getElementById("week-jump-btn").onclick = () => { jumpInput.showPicker ? jumpInput.showPicker() : jumpInput.focus(); };
+  jumpInput.onchange = () => {
+    if (!jumpInput.value) return;
+    state.weekStart = startOfDay(new Date(jumpInput.value));
+    refreshAgendaBody();
+  };
 
   container.querySelectorAll("[data-rdv-chip]").forEach((el) => {
     el.onclick = () => openRdvDetail(el.dataset.rdvChip);
@@ -263,10 +275,11 @@ function renderRdvChip(r, clientMap) {
   const c = clientMap[r.clientId];
   const name = c ? `${c.prenom} ${c.nom}` : "Client supprimé";
   const addr = c ? c.adresse : (r.adresse || "");
-  const typeClass = r.type === "entretien" ? "type-entretien" : "type-depannage";
+  const honore = r.statut === "honore";
+  const typeClass = honore ? "is-honore" : (r.type === "entretien" ? "type-entretien" : "type-depannage");
   const period = periodLabel(r.periode);
   return `<button class="rdv-chip ${typeClass}" data-rdv-chip="${r.id}">
-    ${period ? `<span class="chip-period">${period}</span>` : ""}
+    ${honore ? '<span class="chip-period">✓ Honoré</span>' : (period ? `<span class="chip-period">${period}</span>` : "")}
     <span class="chip-name">${escapeHtml(name)}</span>
     ${addr ? `<span class="chip-addr">📍 ${escapeHtml(addr)}</span>` : ""}
   </button>`;
@@ -366,7 +379,7 @@ async function optimizeDay(dateISO) {
 }
 
 async function runOptimize(dateISO, depart) {
-  const rdvs = (await DB.listRendezvous()).filter((r) => r.date === dateISO);
+  const rdvs = (await DB.listRendezvous()).filter((r) => r.date === dateISO && r.statut !== "honore");
   const clients = await DB.listClients();
   const cmap = Object.fromEntries(clients.map((c) => [c.id, c]));
 
@@ -920,11 +933,32 @@ async function renderNearbyHtml(clientId, dateISO, excludeRdvId) {
   `;
 }
 
+async function computeNearbyByPosition(coords, horizonDays) {
+  const startISO = toISO(new Date());
+  const endDate = new Date();
+  endDate.setDate(endDate.getDate() + horizonDays);
+  const endISO = toISO(endDate);
+
+  const all = (await DB.listRendezvous()).filter((r) => r.date >= startISO && r.date <= endISO && r.statut !== "honore");
+  const clients = await DB.listClients();
+  const cmap = Object.fromEntries(clients.map((c) => [c.id, c]));
+
+  return all
+    .map((r) => {
+      const c = cmap[r.clientId];
+      if (!c || c.lat == null) return null;
+      return { date: r.date, name: `${c.prenom} ${c.nom}`, distKm: haversineKm(coords.lat, coords.lon, c.lat, c.lon) };
+    })
+    .filter((x) => x && x.distKm <= 20)
+    .sort((a, b) => a.distKm - b.distKm)
+    .slice(0, 8);
+}
+
 // ---------- Formulaire rendez-vous ----------
 async function openRdvForm(prefill = {}, existing) {
   const clients = await DB.listClients();
   const r = existing || {};
-  let selectedClientId = r.clientId || prefill.clientId || (clients[0] && clients[0].id) || null;
+  let selectedClientId = r.clientId || prefill.clientId || null;
   const date = r.date || prefill.date || toISO(new Date());
   const periode = r.periode ?? prefill.periode ?? "";
   const type = r.type || prefill.type || "entretien";
@@ -933,14 +967,24 @@ async function openRdvForm(prefill = {}, existing) {
     <h2>${existing ? "Modifier le rendez-vous" : "Nouveau rendez-vous"}</h2>
     <div class="form-row">
       <label>Client</label>
-      <div id="f-client-selected" class="client-picker-selected"></div>
-      <input type="text" id="f-client-search" placeholder="Rechercher un client…" />
-      <div id="f-client-results" class="client-picker-results"></div>
+      <div class="pill-choice" id="f-client-mode">
+        <button type="button" data-val="existing" class="active period-active">Client existant</button>
+        <button type="button" data-val="new">Nouveau client</button>
+      </div>
     </div>
-    <button type="button" class="choice-tile" id="f-client-new" style="margin:-4px 0 10px;">
-      <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z"/></svg>
-      <span>Nouveau client<span class="sub">Créer une fiche en même temps que ce RDV</span></span>
-    </button>
+    <div id="client-existing-block">
+      <div class="form-row">
+        <div id="f-client-selected" class="client-picker-selected"></div>
+        <input type="text" id="f-client-search" placeholder="Rechercher un client…" />
+        <div id="f-client-results" class="client-picker-results"></div>
+      </div>
+    </div>
+    <div id="client-new-block" hidden>
+      <button type="button" class="choice-tile" id="f-client-new-btn" style="margin-top:0;">
+        <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z"/></svg>
+        <span>Créer un nouveau client<span class="sub">Ouvre la fiche complète, puis reprend ce rendez-vous</span></span>
+      </button>
+    </div>
     <div class="form-row"><label>Date</label><input type="date" id="f-date" value="${date}" /></div>
     <div class="form-row">
       <label>Moment souhaité par le client (facultatif)</label>
@@ -959,12 +1003,33 @@ async function openRdvForm(prefill = {}, existing) {
     </div>
     <div class="form-row"><label>Commentaire (facultatif)</label><textarea id="f-comment">${escapeHtml(r.commentaire || "")}</textarea></div>
     <div id="near-container"></div>
+    <div class="info-block" style="margin-top:2px;">
+      <h3>Proposer une date selon le secteur</h3>
+      <p class="near-hint" style="margin:0 0 8px;">Utile au téléphone : indique la ville ou l'adresse dite par l'appelant pour voir si d'autres clients y ont déjà rendez-vous.</p>
+      <input type="text" id="f-sector-input" placeholder="Ville ou adresse (ex : Étretat)" style="width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:10px;font-size:15px;background:var(--surface);color:var(--ink);margin-bottom:8px;" />
+      <div class="pill-choice pill-3" id="geo-near-buttons">
+        <button type="button" data-days="30">30 jours</button>
+        <button type="button" data-days="90">90 jours</button>
+        <button type="button" data-days="365">12 mois</button>
+      </div>
+      <div id="geo-near-results"></div>
+    </div>
     <div class="sheet-actions">
       <button class="btn-secondary" id="cancel-btn">Annuler</button>
       <button class="btn-primary" id="save-btn">Enregistrer</button>
     </div>
     ${existing ? `<button class="btn-danger" id="del-btn" style="width:100%;margin-top:10px;">Supprimer le rendez-vous</button>` : ""}
   `);
+
+  document.querySelectorAll("#f-client-mode button").forEach((b) => {
+    b.onclick = () => {
+      document.querySelectorAll("#f-client-mode button").forEach((x) => x.classList.remove("active", "period-active"));
+      b.classList.add("active", "period-active");
+      const mode = b.dataset.val;
+      document.getElementById("client-existing-block").hidden = mode !== "existing";
+      document.getElementById("client-new-block").hidden = mode !== "new";
+    };
+  });
 
   const selectedEl = document.getElementById("f-client-selected");
   const searchInput = document.getElementById("f-client-search");
@@ -994,7 +1059,7 @@ async function openRdvForm(prefill = {}, existing) {
     });
   };
 
-  document.getElementById("f-client-new").onclick = () => {
+  document.getElementById("f-client-new-btn").onclick = () => {
     const stash = {
       date: document.getElementById("f-date").value,
       periode: selPeriode,
@@ -1019,6 +1084,36 @@ async function openRdvForm(prefill = {}, existing) {
   }
   document.getElementById("f-date").onchange = refreshNearby;
   refreshNearby();
+
+  let sectorCoords = null;
+  const sectorInput = document.getElementById("f-sector-input");
+  sectorInput.oninput = () => { sectorCoords = null; };
+
+  document.querySelectorAll("#geo-near-buttons button").forEach((b) => {
+    b.onclick = async () => {
+      let coords = sectorCoords;
+      if (!coords) {
+        const addr = sectorInput.value.trim();
+        if (!addr) { toast("Indique d'abord une ville ou une adresse"); return; }
+        toast("Recherche de l'adresse…");
+        coords = await geocodeAddress(addr);
+        if (!coords) { toast("Adresse introuvable (vérifie l'orthographe ou la connexion)"); return; }
+        sectorCoords = coords;
+      }
+      const days = parseInt(b.dataset.days, 10);
+      const results = await computeNearbyByPosition(coords, days);
+      const resultsEl = document.getElementById("geo-near-results");
+      resultsEl.innerHTML = results.length
+        ? `<div class="near-list">${results.map((x) => `<button type="button" class="near-item near-item-btn" data-copy-date-geo="${x.date}"><span>${fmtDateFR(x.date)} — ${escapeHtml(x.name)}</span><span class="dist">${x.distKm.toFixed(1)} km</span></button>`).join("")}</div>`
+        : `<p class="near-hint">Aucun rendez-vous trouvé à proximité sur cette période.</p>`;
+      resultsEl.querySelectorAll("[data-copy-date-geo]").forEach((el) => {
+        el.onclick = () => {
+          document.getElementById("f-date").value = el.dataset.copyDateGeo;
+          refreshNearby();
+        };
+      });
+    };
+  });
 
   let selPeriode = periode, selType = type;
   document.querySelectorAll("#f-periode button").forEach((b) => {
@@ -1077,9 +1172,9 @@ async function openRdvDetail(id) {
 
   openSheet(`
     <h2>${client ? escapeHtml(client.prenom) + " " + escapeHtml(client.nom) : "Rendez-vous"}</h2>
-    <p style="color:var(--smoke);font-size:13px;margin:-10px 0 4px;">${fmtDateFR(r.date)}${period ? " · " + period : ""} · ${r.type === "entretien" ? "Entretien" : "Dépannage"}</p>
+    <p style="color:var(--smoke);font-size:13px;margin:-10px 0 4px;">${fmtDateFR(r.date)}${period ? " · " + period : ""} · ${r.type === "entretien" ? "Entretien" : "Dépannage"}${r.statut === "honore" ? " · <span style=\"color:var(--moss);font-weight:600;\">✓ Honoré</span>" : ""}</p>
     ${addr ? `<p style="font-size:13.5px;color:var(--ink-dim);margin:0 0 4px;">📍 ${escapeHtml(addr)}</p>` : ""}
-    ${r.commentaire ? `<p style="font-size:13.5px;color:var(--ink-dim);margin:0 0 4px;">${escapeHtml(r.commentaire)}</p>` : ""}
+    ${r.statut === "honore" && r.compteRenduHonore ? `<p style="font-size:13.5px;color:var(--ink-dim);margin:0 0 4px;">📝 ${escapeHtml(r.compteRenduHonore)}</p>` : (r.commentaire ? `<p style="font-size:13.5px;color:var(--ink-dim);margin:0 0 4px;">${escapeHtml(r.commentaire)}</p>` : "")}
 
     <div class="quick-actions">
       <a class="qa-btn" href="${wazeUrl || "#"}" ${wazeUrl ? "" : 'aria-disabled="true"'}>
@@ -1100,7 +1195,7 @@ async function openRdvDetail(id) {
       </a>
     </div>
 
-    <button class="btn-primary" id="honore-btn" style="width:100%;margin-bottom:10px;">✓ RDV honoré</button>
+    ${r.statut === "honore" ? "" : '<button class="btn-primary" id="honore-btn" style="width:100%;margin-bottom:10px;">✓ RDV honoré</button>'}
     <div class="sheet-actions">
       <button class="btn-secondary" id="edit-btn">Modifier</button>
       <button class="btn-danger" id="del-btn">Supprimer</button>
@@ -1114,7 +1209,8 @@ async function openRdvDetail(id) {
     toast("Rendez-vous supprimé");
     render();
   };
-  document.getElementById("honore-btn").onclick = () => openHonoreForm(r, client);
+  const honoreBtn = document.getElementById("honore-btn");
+  if (honoreBtn) honoreBtn.onclick = () => openHonoreForm(r, client);
 }
 
 async function openHonoreForm(r, client) {
@@ -1136,7 +1232,9 @@ async function openHonoreForm(r, client) {
       type: r.type,
       description: document.getElementById("f-compte-rendu").value.trim(),
     });
-    await DB.deleteRendezvous(r.id);
+    r.statut = "honore";
+    r.compteRenduHonore = document.getElementById("f-compte-rendu").value.trim();
+    await DB.saveRendezvous(r);
     closeSheet();
     toast("Rendez-vous honoré, ajouté à l'historique");
     navigate("agenda");

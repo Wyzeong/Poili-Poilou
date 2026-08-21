@@ -58,6 +58,17 @@ button { font-family: inherit; }
   display: flex; align-items: center; justify-content: center;
   flex: 0 0 auto;
 }
+.btn-back {
+  width: 34px; height: 34px;
+  border-radius: 100%;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  color: var(--ink);
+  display: flex; align-items: center; justify-content: center;
+  flex: 0 0 auto;
+  margin-right: 2px;
+}
+.btn-back:active { background: var(--surface-2); }
 .brand-text { display: flex; flex-direction: column; flex: 1; }
 .brand-text .brand-title {
   font-family: var(--font-display);

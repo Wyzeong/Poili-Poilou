@@ -31,13 +31,45 @@ function periodLabel(p) { return p === "matin" ? "Matin" : p === "apres-midi" ? 
 
 // ---------- Rendu racine ----------
 const root = document.getElementById("view-root");
-const btnToday = document.getElementById("btn-today");
+const btnBack = document.getElementById("btn-back");
+
+// ---------- Navigation / historique navigateur ----------
+// Chaque changement de vue pousse une entrée d'historique, pour que le
+// geste "retour" (bord d'écran) et le bouton retour du téléphone fonctionnent
+// normalement, comme dans une appli native.
+function historySnapshot() {
+  return { view: state.view, clientId: state.clientId };
+}
+function navigate(view, clientId = null) {
+  state.view = view;
+  state.clientId = clientId;
+  history.pushState(historySnapshot(), "", "#" + view);
+  render();
+}
+window.addEventListener("popstate", (e) => {
+  // Si une modale (sheet) est ouverte, le retour la ferme d'abord,
+  // sans faire reculer la vue en dessous.
+  if (!sheet.hidden) {
+    closeSheet();
+    history.pushState(historySnapshot(), "", location.hash || "#" + state.view);
+    return;
+  }
+  if (e.state) {
+    state.view = e.state.view;
+    state.clientId = e.state.clientId || null;
+  } else {
+    state.view = "accueil";
+    state.clientId = null;
+  }
+  render();
+});
 
 async function render() {
   document.querySelectorAll(".tab-btn").forEach((b) => {
     b.classList.toggle("active", b.dataset.view === state.view || (state.view === "fiche" && b.dataset.view === "clients"));
   });
-  btnToday.hidden = true;
+  btnBack.hidden = state.view === "accueil";
+  btnBack.onclick = () => history.back();
 
   if (state.view === "accueil") await renderAccueil();
   else if (state.view === "agenda") await renderAgenda();
@@ -84,8 +116,8 @@ async function renderAccueil() {
     </div>
   `;
 
-  root.querySelector('[data-nav="agenda"]').onclick = () => { state.view = "agenda"; render(); };
-  root.querySelector('[data-nav="clients"]').onclick = () => { state.view = "clients"; render(); };
+  root.querySelector('[data-nav="agenda"]').onclick = () => navigate("agenda");
+  root.querySelector('[data-nav="clients"]').onclick = () => navigate("clients");
   root.querySelector('[data-nav="rdv-new"]').onclick = () => openRdvForm();
 }
 
@@ -189,7 +221,7 @@ async function renderClients() {
   const input = document.getElementById("client-search");
   input.oninput = () => { state.clientSearch = input.value; renderClientsListOnly(); };
   root.querySelectorAll("[data-client]").forEach((el) => {
-    el.onclick = () => { state.clientId = el.dataset.client; state.view = "fiche"; render(); };
+    el.onclick = () => navigate("fiche", el.dataset.client);
   });
 }
 
@@ -217,7 +249,7 @@ async function renderClientsListOnly() {
   root.querySelectorAll(".client-row, .empty-state").forEach((n) => n.remove());
   root.append(...container.childNodes);
   root.querySelectorAll("[data-client]").forEach((el) => {
-    el.onclick = () => { state.clientId = el.dataset.client; state.view = "fiche"; render(); };
+    el.onclick = () => navigate("fiche", el.dataset.client);
   });
 }
 
@@ -237,10 +269,6 @@ async function renderFiche() {
   const smsHref = c.telephone ? `sms:${c.telephone.replace(/\s+/g, "")}?body=${smsBody}` : null;
 
   root.innerHTML = `
-    <button class="back-row" id="back-btn">
-      <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M15 6l-6 6 6 6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      Clients
-    </button>
     <div class="fiche-head">
       <p class="fname">${escapeHtml(c.prenom)} ${escapeHtml(c.nom)}</p>
       <p class="faddr">${escapeHtml(c.adresse || "Adresse non renseignée")}</p>
@@ -306,7 +334,6 @@ async function renderFiche() {
     </div>
   `;
 
-  document.getElementById("back-btn").onclick = () => { state.view = "clients"; render(); };
   document.getElementById("qa-rdv").onclick = () => openRdvForm({ clientId: c.id });
   document.getElementById("edit-client-btn").onclick = () => openClientForm(c);
   document.getElementById("del-client-btn").onclick = () => confirmDeleteClient(c);
@@ -494,9 +521,7 @@ async function openClientForm(existing) {
     const saved = await DB.saveClient(client);
     closeSheet();
     toast(existing ? "Client mis à jour" : "Client créé");
-    state.clientId = saved.id;
-    state.view = "fiche";
-    render();
+    navigate("fiche", saved.id);
   };
 }
 
@@ -516,8 +541,7 @@ async function confirmDeleteClient(c) {
     await DB.deleteClient(c.id);
     closeSheet();
     toast("Client supprimé");
-    state.view = "clients";
-    render();
+    navigate("clients");
   };
 }
 
@@ -594,8 +618,7 @@ async function openRdvForm(prefill = {}, existing) {
     await DB.saveRendezvous(item);
     closeSheet();
     toast(existing ? "Rendez-vous mis à jour" : "Rendez-vous créé");
-    state.view = "agenda";
-    render();
+    navigate("agenda");
   };
   if (existing) {
     document.getElementById("del-btn").onclick = async () => {
@@ -679,15 +702,13 @@ async function openInterventionForm(client, existing) {
     await DB.saveIntervention(item);
     closeSheet();
     toast(existing ? "Intervention mise à jour" : "Intervention ajoutée");
-    state.clientId = client.id;
-    state.view = "fiche";
-    render();
+    navigate("fiche", client.id);
   };
 }
 
 // ---------- Navigation onglets ----------
 document.querySelectorAll(".tab-btn").forEach((btn) => {
-  btn.onclick = () => { state.view = btn.dataset.view; render(); };
+  btn.onclick = () => navigate(btn.dataset.view);
 });
 
 // ---------- Toast ----------
@@ -716,4 +737,5 @@ if ("serviceWorker" in navigator) {
 }
 
 // ---------- Démarrage ----------
+history.replaceState(historySnapshot(), "", "#accueil");
 render();

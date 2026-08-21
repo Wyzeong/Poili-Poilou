@@ -2,7 +2,7 @@
    Vues : Accueil / Agenda / Clients / Fiche client / Paramètres
    Toute la donnée passe par DB (db.js → IndexedDB). */
 
-const APP_VERSION = "1.2.3"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
+const APP_VERSION = "1.3.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
 
 const JOURS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
 const JOURS_COURT = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
@@ -12,7 +12,7 @@ const DOMICILE_ADRESSE = "41 avenue Maréchal Foch, 76290 Montivilliers";
 
 const state = {
   view: "accueil",
-  weekStart: startOfDay(new Date()),
+  weekStart: startOfWeek(new Date()),
   clientId: null,
   clientSearch: "",
   agendaSearch: "",
@@ -22,6 +22,12 @@ const state = {
 function startOfDay(d) {
   const date = new Date(d);
   date.setHours(0, 0, 0, 0);
+  return date;
+}
+function startOfWeek(d) {
+  const date = startOfDay(d);
+  const day = (date.getDay() + 6) % 7; // lundi = 0
+  date.setDate(date.getDate() - day);
   return date;
 }
 function addDays(d, n) {
@@ -186,7 +192,7 @@ async function refreshAgendaBody() {
     container.innerHTML = await renderAgendaSearchHtml(state.agendaSearch.trim());
     container.querySelectorAll("[data-goto-date]").forEach((el) => {
       el.onclick = () => {
-        state.weekStart = startOfDay(new Date(el.dataset.gotoDate));
+        state.weekStart = startOfWeek(new Date(el.dataset.gotoDate));
         state.agendaSearch = "";
         const input = document.getElementById("agenda-search");
         if (input) input.value = "";
@@ -251,12 +257,12 @@ async function refreshAgendaBody() {
 
   document.getElementById("week-prev").onclick = () => { state.weekStart = addDays(state.weekStart, -7); refreshAgendaBody(); };
   document.getElementById("week-next").onclick = () => { state.weekStart = addDays(state.weekStart, 7); refreshAgendaBody(); };
-  document.getElementById("week-today").onclick = () => { state.weekStart = startOfDay(new Date()); refreshAgendaBody(); };
+  document.getElementById("week-today").onclick = () => { state.weekStart = startOfWeek(new Date()); refreshAgendaBody(); };
   const jumpInput = document.getElementById("week-jump-input");
   document.getElementById("week-jump-btn").onclick = () => { jumpInput.showPicker ? jumpInput.showPicker() : jumpInput.focus(); };
   jumpInput.onchange = () => {
     if (!jumpInput.value) return;
-    state.weekStart = startOfDay(new Date(jumpInput.value));
+    state.weekStart = startOfWeek(new Date(jumpInput.value));
     refreshAgendaBody();
   };
 

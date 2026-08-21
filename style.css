@@ -69,12 +69,15 @@ button { font-family: inherit; }
   margin-right: 2px;
 }
 .btn-back:active { background: var(--surface-2); }
-.brand-text { display: flex; flex-direction: column; flex: 1; }
+.brand-text { display: flex; flex-direction: column; flex: 1; min-width: 0; }
 .brand-text .brand-title {
   font-family: var(--font-display);
   font-weight: 600;
-  font-size: 17px;
-  line-height: 1.15;
+  font-size: 14.5px;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .brand-text .brand-sub {
   font-size: 11.5px;
@@ -206,6 +209,168 @@ button { font-family: inherit; }
   padding: 12px 14px;
   font-size: 13px;
 }
+
+/* ---------- Agenda : grille semaine horizontale (façon Google Agenda) ---------- */
+.week-grid {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  scroll-snap-type: x proximity;
+  margin: 0 -16px 4px;
+  padding: 2px 16px 10px;
+}
+.day-col {
+  flex: 0 0 132px;
+  scroll-snap-align: start;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 10px 8px;
+  display: flex;
+  flex-direction: column;
+}
+.day-col.is-today {
+  border-color: var(--ember);
+  background: var(--ember-wash);
+}
+.day-col-head { text-align: center; margin-bottom: 8px; }
+.day-col-head .dow {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--smoke);
+}
+.day-col.is-today .dow { color: var(--ember); }
+.day-col-head .dnum {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 19px;
+  margin-top: 1px;
+}
+.day-col-optimize {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  width: 100%;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px 4px;
+  margin-bottom: 8px;
+  color: var(--ember);
+  font-size: 10px;
+  font-weight: 600;
+  text-align: center;
+}
+.day-col-add {
+  width: 100%;
+  background: none;
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  padding: 10px;
+  color: var(--smoke);
+  font-size: 18px;
+  line-height: 1;
+  margin-top: auto;
+}
+.rdv-chip {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: var(--surface-2);
+  border: none;
+  border-radius: 10px;
+  padding: 8px 9px;
+  margin-bottom: 7px;
+}
+.rdv-chip.type-entretien { background: var(--moss-wash); }
+.rdv-chip.type-depannage { background: var(--ember-wash); }
+.rdv-chip .chip-period {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--ember);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 2px;
+}
+.rdv-chip .chip-name {
+  display: block;
+  font-weight: 600;
+  font-size: 12.5px;
+  color: var(--ink);
+  line-height: 1.25;
+  margin-bottom: 2px;
+}
+.rdv-chip .chip-addr {
+  display: block;
+  font-size: 10px;
+  color: var(--smoke);
+  line-height: 1.3;
+}
+
+/* ---------- Recherche agenda (résultats) ---------- */
+.near-item-block {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  text-align: left;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 11px 13px;
+  margin-bottom: 8px;
+  color: var(--ink);
+}
+.near-item-block .nib-date {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ember);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 2px;
+}
+.near-item-block .nib-name { font-weight: 600; font-size: 14px; }
+.near-item-block .nib-addr { font-size: 12px; color: var(--smoke); margin-top: 2px; }
+
+/* ---------- Sélecteur de client (recherche) ---------- */
+.client-picker-selected { margin-bottom: 6px; }
+.client-picker-chip {
+  display: inline-block;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 100px;
+  padding: 6px 12px;
+  font-size: 13.5px;
+  font-weight: 600;
+}
+.client-picker-results { margin-top: 4px; }
+.client-picker-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 9px 11px;
+  margin-bottom: 6px;
+  font-size: 13.5px;
+  color: var(--ink);
+}
+
+/* ---------- Pastille de géocodage (liste clients) ---------- */
+.geo-dot {
+  display: inline-block;
+  width: 7px; height: 7px;
+  border-radius: 100%;
+  background: var(--moss);
+  margin-left: 5px;
+  vertical-align: middle;
+}
+
+.rdv-upcoming-item { cursor: pointer; }
 .rdv-card {
   display: flex;
   align-items: flex-start;
@@ -489,6 +654,17 @@ button { font-family: inherit; }
 .near-item { display: flex; justify-content: space-between; font-size: 13px; padding: 7px 0; border-bottom: 1px solid var(--line); }
 .near-item:last-child { border-bottom: none; }
 .near-item .dist { font-family: var(--font-mono); color: var(--smoke); }
+.near-item-btn {
+  width: 100%;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--line);
+  color: var(--ink);
+  font-family: inherit;
+  cursor: pointer;
+}
+.near-item-btn:last-child { border-bottom: none; }
+.near-item-btn:active { background: var(--surface-2); }
 
 /* ---------- FAB ---------- */
 .fab {

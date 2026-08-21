@@ -1,16 +1,21 @@
 /* app.js — SPA légère, sans framework, 100% locale.
-   Vues : Accueil / Agenda / Clients / Fiche client / Réglages
+   Vues : Accueil / Agenda / Clients / Fiche client / Paramètres
    Toute la donnée passe par DB (db.js → IndexedDB). */
 
+const APP_VERSION = "1.0.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
+
 const JOURS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
+const JOURS_COURT = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
 const MOIS = ["janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre", "novembre", "décembre"];
 const MOIS_COURT = ["janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "sept.", "oct.", "nov.", "déc."];
+const DOMICILE_ADRESSE = "41 avenue Maréchal Foch, 76290 Montivilliers";
 
 const state = {
   view: "accueil",
   weekStart: startOfWeek(new Date()),
   clientId: null,
   clientSearch: "",
+  agendaSearch: "",
 };
 
 // ---------- Utilitaires date ----------
@@ -36,10 +41,9 @@ function fmtDateFR(iso) {
   const [y, m, d] = iso.split("-").map(Number);
   return `${d} ${MOIS_COURT[m - 1]} ${y}`;
 }
-function dayLabel(iso) {
-  const [y, m, d] = iso.split("-").map(Number);
-  const date = new Date(y, m - 1, d);
-  return `${JOURS[(date.getDay() + 6) % 7]} ${d} ${MOIS[m - 1]}`.toUpperCase();
+function fmtDateTimeFR(iso) {
+  const d = new Date(iso);
+  return `${d.toLocaleDateString("fr-FR")} à ${d.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}`;
 }
 function periodLabel(p) { return p === "matin" ? "Matin" : p === "apres-midi" ? "Après-midi" : ""; }
 
@@ -48,9 +52,6 @@ const root = document.getElementById("view-root");
 const btnBack = document.getElementById("btn-back");
 
 // ---------- Navigation / historique navigateur ----------
-// Chaque changement de vue pousse une entrée d'historique, pour que le
-// geste "retour" (bord d'écran) et le bouton retour du téléphone fonctionnent
-// normalement, comme dans une appli native.
 function historySnapshot() {
   return { view: state.view, clientId: state.clientId };
 }
@@ -60,18 +61,14 @@ function navigate(view, clientId = null) {
   history.pushState(historySnapshot(), "", "#" + view);
   render();
 }
-let exitAllowed = false;
 
+let exitAllowed = false;
 window.addEventListener("popstate", (e) => {
-  // Si une modale (sheet) est ouverte, le retour la ferme d'abord,
-  // sans faire reculer la vue en dessous.
   if (!sheet.hidden) {
     closeSheet();
     history.pushState(historySnapshot(), "", location.hash || "#" + state.view);
     return;
   }
-  // Sur l'accueil, un retour supplémentaire quitterait l'appli : on demande confirmation
-  // au lieu de laisser faire, sauf si l'utilisateur vient de confirmer vouloir quitter.
   if (state.view === "accueil" && !exitAllowed) {
     history.pushState(historySnapshot(), "", "#accueil");
     askExitConfirm();
@@ -155,16 +152,52 @@ async function renderAccueil() {
         </span>
         <svg class="hb-chev" viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </button>
+      <button class="home-btn" data-nav="reglages">
+        <span class="hb-icon"><svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M19.4 13a7.5 7.5 0 0 0 0-2l2-1.6-2-3.4-2.4 1a7.6 7.6 0 0 0-1.7-1L15 3h-4l-.3 2.5a7.6 7.6 0 0 0-1.7 1l-2.4-1-2 3.4L6.6 11a7.5 7.5 0 0 0 0 2l-2 1.6 2 3.4 2.4-1a7.6 7.6 0 0 0 1.7 1L11 21h4l.3-2.5a7.6 7.6 0 0 0 1.7-1l2.4 1 2-3.4-2-1.6zM13 15.5A3.5 3.5 0 1 1 13 8.5a3.5 3.5 0 0 1 0 7z"/></svg></span>
+        <span class="hb-text">
+          <span class="hb-title">Paramètres</span>
+          <span class="hb-sub">Version, sauvegarde, point de départ</span>
+        </span>
+        <svg class="hb-chev" viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
     </div>
   `;
 
   root.querySelector('[data-nav="agenda"]').onclick = () => navigate("agenda");
   root.querySelector('[data-nav="clients"]').onclick = () => navigate("clients");
+  root.querySelector('[data-nav="reglages"]').onclick = () => navigate("reglages");
   root.querySelector('[data-nav="rdv-new"]').onclick = () => openRdvForm();
 }
 
-// ---------- Vue Agenda (calendrier semaine, façon Google Agenda, sans horaires) ----------
+// ---------- Vue Agenda (colonnes semaine, façon Google Agenda) ----------
 async function renderAgenda() {
+  root.innerHTML = `
+    <input type="text" class="search-bar" id="agenda-search" placeholder="Rechercher un client dans l'agenda…" value="${escapeHtml(state.agendaSearch)}" />
+    <div id="agenda-body"></div>
+  `;
+  const input = document.getElementById("agenda-search");
+  input.oninput = () => { state.agendaSearch = input.value; refreshAgendaBody(); };
+  await refreshAgendaBody();
+}
+
+async function refreshAgendaBody() {
+  const container = document.getElementById("agenda-body");
+  if (!container) return;
+
+  if (state.agendaSearch.trim()) {
+    container.innerHTML = await renderAgendaSearchHtml(state.agendaSearch.trim());
+    container.querySelectorAll("[data-goto-date]").forEach((el) => {
+      el.onclick = () => {
+        state.weekStart = startOfWeek(new Date(el.dataset.gotoDate));
+        state.agendaSearch = "";
+        const input = document.getElementById("agenda-search");
+        if (input) input.value = "";
+        refreshAgendaBody();
+      };
+    });
+    return;
+  }
+
   const days = Array.from({ length: 7 }, (_, i) => addDays(state.weekStart, i));
   const startISO = toISO(days[0]), endISO = toISO(days[6]);
   const weekRdvs = await DB.listRendezvousRange(startISO, endISO);
@@ -185,6 +218,7 @@ async function renderAgenda() {
         <svg viewBox="0 0 24 24" width="18" height="18"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M9 6l6 6-6 6"/></svg>
       </button>
     </div>
+    <div class="week-grid">
   `;
 
   for (const d of days) {
@@ -192,83 +226,77 @@ async function renderAgenda() {
     const isToday = isSameDay(d, today);
     const items = (byDate[iso] || []).slice().sort((a, b) => (a.ordre ?? 0) - (b.ordre ?? 0));
 
-    html += `<div class="day-group">
-      <div class="day-group-head">
-        <span class="day-group-label ${isToday ? "is-today" : ""}">${dayLabel(iso)}${isToday ? " · Aujourd'hui" : ""}</span>
+    html += `<div class="day-col ${isToday ? "is-today" : ""}">
+      <div class="day-col-head">
+        <div class="dow">${JOURS_COURT[(d.getDay() + 6) % 7]}</div>
+        <div class="dnum">${d.getDate()}</div>
       </div>
-      ${items.length >= 2 ? `<button class="btn-optimize" data-optimize="${iso}">
-        <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M12 2c1 3-1 4-1 6 0 1.2 1 2 2 2 1.3 0 2-1 2-2.2 1.6 1.4 3 3.7 3 6.2a6 6 0 0 1-12 0c0-2.6 1.1-4.3 2.3-6C9.2 6.3 10.5 4.4 12 2Z"/></svg>
-        Optimiser le trajet (${items.length} clients)
+      ${items.length >= 2 ? `<button class="day-col-optimize" data-optimize="${iso}">
+        <svg viewBox="0 0 24 24" width="13" height="13"><path fill="currentColor" d="M12 2c1 3-1 4-1 6 0 1.2 1 2 2 2 1.3 0 2-1 2-2.2 1.6 1.4 3 3.7 3 6.2a6 6 0 0 1-12 0c0-2.6 1.1-4.3 2.3-6C9.2 6.3 10.5 4.4 12 2Z"/></svg>
+        Optimiser
       </button>` : ""}
       ${items.length === 0
-        ? `<button class="day-empty-add" data-add="${iso}">+ Ajouter un rendez-vous</button>`
-        : items.map((r, idx) => renderRdvCard(r, clientMap, idx === 0, idx === items.length - 1)).join("")}
+        ? `<button class="day-col-add" data-add="${iso}">+</button>`
+        : items.map((r) => renderRdvChip(r, clientMap)).join("")}
     </div>`;
   }
 
-  root.innerHTML = html;
+  html += `</div>`;
+  container.innerHTML = html;
 
-  document.getElementById("week-prev").onclick = () => { state.weekStart = addDays(state.weekStart, -7); render(); };
-  document.getElementById("week-next").onclick = () => { state.weekStart = addDays(state.weekStart, 7); render(); };
-  document.getElementById("week-today").onclick = () => { state.weekStart = startOfWeek(new Date()); render(); };
+  document.getElementById("week-prev").onclick = () => { state.weekStart = addDays(state.weekStart, -7); refreshAgendaBody(); };
+  document.getElementById("week-next").onclick = () => { state.weekStart = addDays(state.weekStart, 7); refreshAgendaBody(); };
+  document.getElementById("week-today").onclick = () => { state.weekStart = startOfWeek(new Date()); refreshAgendaBody(); };
 
-  root.querySelectorAll(".rdv-card-body").forEach((el) => {
-    el.onclick = () => openRdvDetail(el.dataset.rdv);
+  container.querySelectorAll("[data-rdv-chip]").forEach((el) => {
+    el.onclick = () => openRdvDetail(el.dataset.rdvChip);
   });
-  root.querySelectorAll("[data-move]").forEach((el) => {
-    el.onclick = (e) => {
-      e.stopPropagation();
-      moveRdv(el.dataset.rdv, el.dataset.move);
-    };
-  });
-  root.querySelectorAll("[data-optimize]").forEach((el) => {
+  container.querySelectorAll("[data-optimize]").forEach((el) => {
     el.onclick = () => optimizeDay(el.dataset.optimize);
   });
-  root.querySelectorAll("[data-add]").forEach((el) => {
+  container.querySelectorAll("[data-add]").forEach((el) => {
     el.onclick = () => openRdvForm({ date: el.dataset.add });
   });
 }
 
-function renderRdvCard(r, clientMap, isFirst, isLast) {
+function renderRdvChip(r, clientMap) {
   const c = clientMap[r.clientId];
   const name = c ? `${c.prenom} ${c.nom}` : "Client supprimé";
-  const addr = r.adresse || (c && c.adresse) || "";
+  const addr = c ? c.adresse : (r.adresse || "");
+  const typeClass = r.type === "entretien" ? "type-entretien" : "type-depannage";
   const period = periodLabel(r.periode);
-  const sub = r.commentaire || (r.type === "entretien" ? "Entretien" : "Dépannage");
-  return `<div class="rdv-card">
-    <button class="rdv-card-body" data-rdv="${r.id}">
-      <p class="rdv-title">${period ? `<span class="rdv-period-tag">${period} ·</span>` : ""}${escapeHtml(name)}</p>
-      ${addr ? `<div class="rdv-addr"><svg viewBox="0 0 24 24" width="12" height="12"><path fill="currentColor" d="M12 2a7 7 0 0 0-7 7c0 5.2 7 13 7 13s7-7.8 7-13a7 7 0 0 0-7-7zm0 9.5A2.5 2.5 0 1 1 12 6.5a2.5 2.5 0 0 1 0 5z"/></svg>${escapeHtml(addr)}</div>` : ""}
-      <div class="rdv-sub">${escapeHtml(sub)}</div>
+  return `<button class="rdv-chip ${typeClass}" data-rdv-chip="${r.id}">
+    ${period ? `<span class="chip-period">${period}</span>` : ""}
+    <span class="chip-name">${escapeHtml(name)}</span>
+    ${addr ? `<span class="chip-addr">📍 ${escapeHtml(addr)}</span>` : ""}
+  </button>`;
+}
+
+async function renderAgendaSearchHtml(query) {
+  const todayISO = toISO(new Date());
+  const q = query.toLowerCase();
+  const all = (await DB.listRendezvous()).filter((r) => r.date >= todayISO);
+  const clients = await DB.listClients();
+  const cmap = Object.fromEntries(clients.map((c) => [c.id, c]));
+
+  const matches = all
+    .map((r) => ({ r, c: cmap[r.clientId] }))
+    .filter((x) => x.c && `${x.c.prenom} ${x.c.nom}`.toLowerCase().includes(q))
+    .sort((a, b) => a.r.date.localeCompare(b.r.date));
+
+  if (matches.length === 0) {
+    return `<div class="empty-state"><span class="emoji">🔍</span>Aucun rendez-vous à venir pour ce client.</div>`;
+  }
+  return matches.map(({ r, c }) => `
+    <button class="near-item-block" data-goto-date="${r.date}">
+      <span class="nib-date">${fmtDateFR(r.date)}</span>
+      <span class="nib-name">${escapeHtml(c.prenom)} ${escapeHtml(c.nom)}</span>
+      <span class="nib-addr">📍 ${escapeHtml(c.adresse || "")}</span>
     </button>
-    <div class="rdv-order-controls">
-      <button data-move="up" data-rdv="${r.id}" ${isFirst ? "disabled" : ""} aria-label="Monter">
-        <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M12 8l-6 6h12z"/></svg>
-      </button>
-      <button data-move="down" data-rdv="${r.id}" ${isLast ? "disabled" : ""} aria-label="Descendre">
-        <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M12 16l6-6H6z"/></svg>
-      </button>
-    </div>
-  </div>`;
+  `).join("");
 }
 
-async function moveRdv(id, direction) {
-  const r = await DB.getRendezvous(id);
-  if (!r) return;
-  const sameDay = (await DB.listRendezvous()).filter((x) => x.date === r.date).sort((a, b) => (a.ordre ?? 0) - (b.ordre ?? 0));
-  const idx = sameDay.findIndex((x) => x.id === id);
-  const swapIdx = direction === "up" ? idx - 1 : idx + 1;
-  if (swapIdx < 0 || swapIdx >= sameDay.length) return;
-  const a = sameDay[idx], b = sameDay[swapIdx];
-  const ordreA = a.ordre ?? 0, ordreB = b.ordre ?? 0;
-  a.ordre = ordreB; b.ordre = ordreA;
-  await DB.saveRendezvous(a);
-  await DB.saveRendezvous(b);
-  render();
-}
-
-const DOMICILE_ADRESSE = "41 avenue Maréchal Foch, 76290 Montivilliers";
-
+// ---------- Optimisation de trajet ----------
 async function getDomicileCoords() {
   const cached = await DB.getParam("domicileCoords", null);
   if (cached && cached.lat != null) return cached;
@@ -379,7 +407,7 @@ async function runOptimize(dateISO, depart) {
     ${result.durationMin != null ? `<div class="info-row"><span class="k">Durée estimée</span><span class="v">${Math.round(result.durationMin)} min</span></div>` : ""}
     <div class="sheet-actions"><button class="btn-primary" id="ok-btn" style="width:100%;">OK</button></div>
   `);
-  document.getElementById("ok-btn").onclick = () => { closeSheet(); render(); };
+  document.getElementById("ok-btn").onclick = () => { closeSheet(); refreshAgendaBody(); };
 }
 
 // ---------- Vue Clients ----------
@@ -405,7 +433,7 @@ function clientRowHtml(c) {
   return `<button class="client-row" data-client="${c.id}">
     <span class="client-avatar">${initials(c)}</span>
     <span>
-      <span class="cname">${escapeHtml(c.prenom)} ${escapeHtml(c.nom)}</span>
+      <span class="cname">${escapeHtml(c.prenom)} ${escapeHtml(c.nom)} ${c.lat != null ? '<span class="geo-dot" title="Adresse géocodée"></span>' : ""}</span>
       <span class="caddr">${escapeHtml(c.adresse || "Adresse non renseignée")}</span>
     </span>
     <span class="chevron">
@@ -439,7 +467,10 @@ async function renderFiche() {
   if (!c) { state.view = "clients"; return render(); }
 
   const historique = await DB.listInterventionsForClient(c.id);
-  const mapsUrl = c.adresse ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(c.adresse)}` : null;
+  const todayISO = toISO(new Date());
+  const upcomingRdv = (await DB.listRendezvous()).filter((r) => r.clientId === c.id && r.date >= todayISO).sort((a, b) => a.date.localeCompare(b.date));
+
+  const wazeUrl = c.adresse ? `https://waze.com/ul?q=${encodeURIComponent(c.adresse)}&navigate=yes` : null;
   const telHref = c.telephone ? `tel:${c.telephone.replace(/\s+/g, "")}` : null;
   const smsBody = encodeURIComponent(`Bonjour ${c.prenom}, je suis en route pour notre rendez-vous. À tout de suite.`);
   const smsHref = c.telephone ? `sms:${c.telephone.replace(/\s+/g, "")}?body=${smsBody}` : null;
@@ -450,19 +481,19 @@ async function renderFiche() {
       <p class="faddr">${escapeHtml(c.adresse || "Adresse non renseignée")}</p>
       ${c.adresse ? (c.lat != null
         ? '<p class="geo-status geo-ok">📍 Adresse localisée</p>'
-        : '<p class="geo-status geo-pending">⚠️ Adresse pas encore géocodée</p>') : ""}
+        : '<p class="geo-status geo-pending">⚠️ Adresse pas encore géocodée <button class="link-btn" id="retry-geo-btn">Réessayer</button></p>') : ""}
     </div>
 
     <div class="quick-actions">
-      <a class="qa-btn" href="${mapsUrl || "#"}" target="_blank" rel="noopener" ${mapsUrl ? "" : "aria-disabled=\"true\""}>
-        <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 2a7 7 0 0 0-7 7c0 5.2 7 13 7 13s7-7.8 7-13a7 7 0 0 0-7-7zm0 9.5A2.5 2.5 0 1 1 12 6.5a2.5 2.5 0 0 1 0 5z"/></svg>
-        Itinéraire
+      <a class="qa-btn" href="${wazeUrl || "#"}" ${wazeUrl ? "" : 'aria-disabled="true"'}>
+        <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 2C6.5 2 2 5.8 2 10.5c0 2.4 1.2 4.6 3.2 6.1-.2.9-.7 2-1.4 2.8-.2.2 0 .6.3.6 1.4-.1 3-.6 4-1.2 1.2.4 2.5.6 3.9.6 5.5 0 10-3.8 10-8.9S17.5 2 12 2z"/></svg>
+        Waze
       </a>
-      <a class="qa-btn" href="${telHref || "#"}" ${telHref ? "" : "aria-disabled=\"true\""}>
+      <a class="qa-btn" href="${telHref || "#"}" ${telHref ? "" : 'aria-disabled="true"'}>
         <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M6.6 10.8c1.4 2.7 3.6 4.9 6.3 6.3l2.1-2.1c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.5.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1C10.6 21 3 13.4 3 4c0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.2.2 2.4.6 3.5.1.4 0 .8-.2 1L6.6 10.8z"/></svg>
         Appeler
       </a>
-      <a class="qa-btn" href="${smsHref || "#"}" ${smsHref ? "" : "aria-disabled=\"true\""}>
+      <a class="qa-btn" href="${smsHref || "#"}" ${smsHref ? "" : 'aria-disabled="true"'}>
         <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M4 4h16v12H7l-3 3V4z"/></svg>
         SMS
       </a>
@@ -487,6 +518,18 @@ async function renderFiche() {
     </div>
 
     ${c.commentaires ? `<div class="info-block"><h3>Commentaires</h3><p class="comment-text">${escapeHtml(c.commentaires)}</p></div>` : ""}
+
+    <div class="info-block">
+      <h3>Rendez-vous à venir</h3>
+      ${upcomingRdv.length === 0 ? '<p style="color:var(--smoke);font-size:13.5px;margin:4px 0;">Aucun rendez-vous planifié.</p>' :
+        upcomingRdv.map((r) => `
+          <button class="hist-item rdv-upcoming-item" data-rdv-upcoming="${r.id}" style="width:100%;text-align:left;background:none;border:none;color:inherit;">
+            <div class="hist-top">
+              <span class="hist-type ${r.type === "entretien" ? "type-entretien" : "type-depannage"}">${r.type === "entretien" ? "Entretien" : "Dépannage"}</span>
+              <span class="hist-date">${fmtDateFR(r.date)}${periodLabel(r.periode) ? " · " + periodLabel(r.periode) : ""}</span>
+            </div>
+          </button>`).join("")}
+    </div>
 
     <div class="info-block">
       <h3>Historique des interventions</h3>
@@ -517,6 +560,25 @@ async function renderFiche() {
   document.getElementById("edit-client-btn").onclick = () => openClientForm(c);
   document.getElementById("del-client-btn").onclick = () => confirmDeleteClient(c);
 
+  const retryBtn = document.getElementById("retry-geo-btn");
+  if (retryBtn) {
+    retryBtn.onclick = async (e) => {
+      e.preventDefault();
+      toast("Nouvelle tentative de géocodage…");
+      const coords = await geocodeAddress(c.adresse);
+      const fresh = await DB.getClient(c.id);
+      if (fresh) {
+        if (coords) { fresh.lat = coords.lat; fresh.lon = coords.lon; fresh.geocodeStatus = "ok"; toast("Adresse localisée ✓"); }
+        else { fresh.geocodeStatus = "pending"; toast("Toujours impossible à géocoder"); }
+        await DB.saveClient(fresh);
+      }
+      render();
+    };
+  }
+
+  root.querySelectorAll("[data-rdv-upcoming]").forEach((el) => {
+    el.onclick = () => openRdvDetail(el.dataset.rdvUpcoming);
+  });
   root.querySelectorAll("[data-edit-hist]").forEach((el) => {
     el.onclick = async () => {
       const item = historique.find((h) => h.id === el.dataset.editHist);
@@ -537,15 +599,23 @@ function labelMateriel(v) {
   return map[v] || v;
 }
 
-// ---------- Réglages ----------
+// ---------- Paramètres ----------
 async function renderReglages() {
   const departRaw = await DB.getParam("pointDepart", null);
   const depart = typeof departRaw === "string" ? { adresse: departRaw, lat: null, lon: null } : (departRaw || { adresse: "", lat: null, lon: null });
   const retourDepart = await DB.getParam("retourDepart", false);
   const clientsSansGeo = (await DB.listClients()).filter((c) => c.adresse && c.lat == null).length;
+  const lastExportAt = await DB.getParam("lastExportAt", null);
 
   root.innerHTML = `
-    <h2 class="view-heading">Réglages</h2>
+    <h2 class="view-heading">Paramètres</h2>
+
+    <div class="info-block">
+      <h3>À propos</h3>
+      <div class="info-row"><span class="k">Version de l'application</span><span class="v">${APP_VERSION}</span></div>
+      <div class="info-row"><span class="k">Dernier export</span><span class="v">${lastExportAt ? fmtDateTimeFR(lastExportAt) : "Jamais"}</span></div>
+    </div>
+
     <div class="info-block">
       <h3>Point de départ</h3>
       <div class="form-row" style="margin-bottom:8px;">
@@ -573,19 +643,12 @@ async function renderReglages() {
 
     <div class="info-block">
       <h3>Sauvegarde locale</h3>
-      <p style="font-size:13.5px;color:var(--smoke);margin:0 0 12px;">Exporte toutes les données (clients, rendez-vous, interventions) dans un fichier que tu peux garder de côté, en attendant la sauvegarde cloud automatique.</p>
+      <p style="font-size:13.5px;color:var(--smoke);margin:0 0 12px;">Exporte toutes les données (clients, rendez-vous, interventions) dans un fichier que tu peux garder de côté. Une sauvegarde automatique externe (protégeant contre la perte ou la casse du téléphone) arrivera dans une prochaine étape.</p>
       <div class="sheet-actions" style="margin-top:0;">
-        <button class="btn-secondary" id="export-btn">Exporter</button>
+        <button class="btn-secondary" id="export-btn">Exporter maintenant</button>
         <button class="btn-secondary" id="import-btn">Importer</button>
       </div>
       <input type="file" id="import-file" accept="application/json" hidden />
-    </div>
-
-    <div class="info-block">
-      <h3>À venir</h3>
-      <p style="font-size:13.5px;color:var(--smoke);line-height:1.5;margin:0;">
-        Sauvegarde automatique sur le cloud.
-      </p>
     </div>
   `;
 
@@ -604,7 +667,7 @@ async function renderReglages() {
     const newDepart = { adresse, lat: addressChanged ? null : depart.lat, lon: addressChanged ? null : depart.lon };
     await DB.setParam("pointDepart", newDepart);
     await DB.setParam("retourDepart", selRetour === "1");
-    toast("Réglages enregistrés");
+    toast("Paramètres enregistrés");
     if (adresse && (addressChanged || newDepart.lat == null)) {
       geocodeAddress(adresse).then(async (coords) => {
         if (!coords) return;
@@ -639,19 +702,8 @@ async function renderReglages() {
   };
 
   document.getElementById("export-btn").onclick = async () => {
-    const data = {
-      clients: await DB.listClients(),
-      rendezvous: await DB.listRendezvous(),
-      interventions: (await Promise.all((await DB.listClients()).map((c) => DB.listInterventionsForClient(c.id)))).flat(),
-      exportedAt: new Date().toISOString(),
-    };
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `tournees-poeles-${toISO(new Date())}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
+    await runExport();
+    if (state.view === "reglages") render();
   };
 
   const fileInput = document.getElementById("import-file");
@@ -671,6 +723,24 @@ async function renderReglages() {
       toast("Fichier invalide");
     }
   };
+}
+
+async function runExport() {
+  const data = {
+    clients: await DB.listClients(),
+    rendezvous: await DB.listRendezvous(),
+    interventions: (await Promise.all((await DB.listClients()).map((c) => DB.listInterventionsForClient(c.id)))).flat(),
+    exportedAt: new Date().toISOString(),
+  };
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `tournees-poeles-${toISO(new Date())}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+  await DB.setParam("lastExportAt", new Date().toISOString());
+  toast("Export terminé ✓");
 }
 
 // ---------- Sheet générique ----------
@@ -713,7 +783,10 @@ document.getElementById("fab-add").onclick = () => {
 };
 
 // ---------- Formulaire client ----------
-async function openClientForm(existing) {
+// onSaved(client) optionnel : si fourni, appelé après l'enregistrement à la place
+// de la navigation par défaut vers la fiche (utilisé pour créer un client depuis
+// le formulaire de rendez-vous, sans perdre le rendez-vous en cours de saisie).
+async function openClientForm(existing, onSaved) {
   const c = existing || {};
   openSheet(`
     <h2>${existing ? "Modifier le client" : "Nouveau client"}</h2>
@@ -761,13 +834,19 @@ async function openClientForm(existing) {
       infosComplementaires: document.getElementById("f-infos").value.trim(),
       commentaires: document.getElementById("f-comment").value.trim(),
     };
+    const addressChanged = !existing || existing.adresse !== client.adresse;
+    if (addressChanged) { client.lat = null; client.lon = null; client.geocodeStatus = null; }
     const saved = await DB.saveClient(client);
     closeSheet();
-    toast(existing ? "Client mis à jour" : "Client créé");
-    navigate("fiche", saved.id);
+
+    if (onSaved) {
+      onSaved(saved);
+    } else {
+      toast(existing ? "Client mis à jour" : "Client créé");
+      navigate("fiche", saved.id);
+    }
 
     // Géocodage en arrière-plan : ne bloque jamais l'enregistrement du client.
-    const addressChanged = !existing || existing.adresse !== client.adresse;
     if (client.adresse && (addressChanged || saved.lat == null)) {
       geocodeAddress(client.adresse).then(async (coords) => {
         const fresh = await DB.getClient(saved.id);
@@ -801,6 +880,7 @@ async function confirmDeleteClient(c) {
   };
 }
 
+// ---------- Rendez-vous proches ----------
 async function renderNearbyHtml(clientId, dateISO, excludeRdvId) {
   if (!clientId || !dateISO) return "";
   const client = await DB.getClient(clientId);
@@ -832,8 +912,9 @@ async function renderNearbyHtml(clientId, dateISO, excludeRdvId) {
   return `
     <div class="info-block" style="margin-top:2px;">
       <h3>Rendez-vous proches (90 prochains jours)</h3>
+      <p class="near-hint" style="margin:0 0 6px;">Touche une date pour la reprendre pour ce rendez-vous.</p>
       <div class="near-list">
-        ${withDist.map((x) => `<div class="near-item"><span>${fmtDateFR(x.date)} — ${escapeHtml(x.name)}</span><span class="dist">${x.distKm.toFixed(1)} km</span></div>`).join("")}
+        ${withDist.map((x) => `<button type="button" class="near-item near-item-btn" data-copy-date="${x.date}"><span>${fmtDateFR(x.date)} — ${escapeHtml(x.name)}</span><span class="dist">${x.distKm.toFixed(1)} km</span></button>`).join("")}
       </div>
     </div>
   `;
@@ -842,24 +923,24 @@ async function renderNearbyHtml(clientId, dateISO, excludeRdvId) {
 // ---------- Formulaire rendez-vous ----------
 async function openRdvForm(prefill = {}, existing) {
   const clients = await DB.listClients();
-  if (clients.length === 0) {
-    toast("Ajoute d'abord un client");
-    return openClientForm();
-  }
   const r = existing || {};
-  const clientId = r.clientId || prefill.clientId || clients[0].id;
+  let selectedClientId = r.clientId || prefill.clientId || (clients[0] && clients[0].id) || null;
   const date = r.date || prefill.date || toISO(new Date());
-  const periode = r.periode ?? "";
-  const type = r.type || "entretien";
+  const periode = r.periode ?? prefill.periode ?? "";
+  const type = r.type || prefill.type || "entretien";
 
   openSheet(`
     <h2>${existing ? "Modifier le rendez-vous" : "Nouveau rendez-vous"}</h2>
     <div class="form-row">
       <label>Client</label>
-      <select id="f-client">
-        ${clients.map((c) => `<option value="${c.id}" ${c.id === clientId ? "selected" : ""}>${escapeHtml(c.prenom)} ${escapeHtml(c.nom)}</option>`).join("")}
-      </select>
+      <div id="f-client-selected" class="client-picker-selected"></div>
+      <input type="text" id="f-client-search" placeholder="Rechercher un client…" />
+      <div id="f-client-results" class="client-picker-results"></div>
     </div>
+    <button type="button" class="choice-tile" id="f-client-new" style="margin:-4px 0 10px;">
+      <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z"/></svg>
+      <span>Nouveau client<span class="sub">Créer une fiche en même temps que ce RDV</span></span>
+    </button>
     <div class="form-row"><label>Date</label><input type="date" id="f-date" value="${date}" /></div>
     <div class="form-row">
       <label>Moment souhaité par le client (facultatif)</label>
@@ -885,13 +966,57 @@ async function openRdvForm(prefill = {}, existing) {
     ${existing ? `<button class="btn-danger" id="del-btn" style="width:100%;margin-top:10px;">Supprimer le rendez-vous</button>` : ""}
   `);
 
+  const selectedEl = document.getElementById("f-client-selected");
+  const searchInput = document.getElementById("f-client-search");
+  const resultsEl = document.getElementById("f-client-results");
+
+  function updateSelectedDisplay() {
+    const c = clients.find((x) => x.id === selectedClientId);
+    selectedEl.innerHTML = c ? `<div class="client-picker-chip">${escapeHtml(c.prenom)} ${escapeHtml(c.nom)}</div>` : `<div class="near-hint">Aucun client sélectionné</div>`;
+  }
+  updateSelectedDisplay();
+
+  searchInput.oninput = () => {
+    const q = searchInput.value.trim().toLowerCase();
+    if (!q) { resultsEl.innerHTML = ""; return; }
+    const matches = clients.filter((c) => `${c.prenom} ${c.nom}`.toLowerCase().includes(q)).slice(0, 6);
+    resultsEl.innerHTML = matches.length
+      ? matches.map((c) => `<button type="button" class="client-picker-item" data-cid="${c.id}">${escapeHtml(c.prenom)} ${escapeHtml(c.nom)}</button>`).join("")
+      : `<p class="near-hint">Aucun client trouvé.</p>`;
+    resultsEl.querySelectorAll("[data-cid]").forEach((btn) => {
+      btn.onclick = () => {
+        selectedClientId = btn.dataset.cid;
+        updateSelectedDisplay();
+        searchInput.value = "";
+        resultsEl.innerHTML = "";
+        refreshNearby();
+      };
+    });
+  };
+
+  document.getElementById("f-client-new").onclick = () => {
+    const stash = {
+      date: document.getElementById("f-date").value,
+      periode: selPeriode,
+      type: selType,
+      commentaire: document.getElementById("f-comment").value,
+    };
+    openClientForm(null, (newClient) => {
+      openRdvForm({ ...stash, clientId: newClient.id }, existing);
+    });
+  };
+
   const nearContainer = document.getElementById("near-container");
   async function refreshNearby() {
-    const clientId = document.getElementById("f-client").value;
     const dateVal = document.getElementById("f-date").value;
-    nearContainer.innerHTML = await renderNearbyHtml(clientId, dateVal, existing ? existing.id : null);
+    nearContainer.innerHTML = await renderNearbyHtml(selectedClientId, dateVal, existing ? existing.id : null);
+    nearContainer.querySelectorAll("[data-copy-date]").forEach((el) => {
+      el.onclick = () => {
+        document.getElementById("f-date").value = el.dataset.copyDate;
+        refreshNearby();
+      };
+    });
   }
-  document.getElementById("f-client").onchange = refreshNearby;
   document.getElementById("f-date").onchange = refreshNearby;
   refreshNearby();
 
@@ -909,7 +1034,9 @@ async function openRdvForm(prefill = {}, existing) {
 
   document.getElementById("cancel-btn").onclick = closeSheet;
   document.getElementById("save-btn").onclick = async () => {
-    const client = clients.find((c) => c.id === document.getElementById("f-client").value);
+    if (!selectedClientId) { toast("Sélectionne ou crée un client"); return; }
+    const client = clients.find((c) => c.id === selectedClientId) || await DB.getClient(selectedClientId);
+    if (!client) { toast("Client introuvable"); return; }
     const item = {
       ...r,
       clientId: client.id,
@@ -935,11 +1062,12 @@ async function openRdvForm(prefill = {}, existing) {
   }
 }
 
+// ---------- Détail rendez-vous (RDV honoré / modifier / supprimer) ----------
 async function openRdvDetail(id) {
   const r = await DB.getRendezvous(id);
   if (!r) return;
   const client = await DB.getClient(r.clientId);
-  const addr = r.adresse || (client && client.adresse) || "";
+  const addr = (client && client.adresse) || r.adresse || "";
   const mapsUrl = addr ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(addr)}` : null;
   const wazeUrl = addr ? `https://waze.com/ul?q=${encodeURIComponent(addr)}&navigate=yes` : null;
   const telHref = client && client.telephone ? `tel:${client.telephone.replace(/\s+/g, "")}` : null;
@@ -954,13 +1082,13 @@ async function openRdvDetail(id) {
     ${r.commentaire ? `<p style="font-size:13.5px;color:var(--ink-dim);margin:0 0 4px;">${escapeHtml(r.commentaire)}</p>` : ""}
 
     <div class="quick-actions">
+      <a class="qa-btn" href="${wazeUrl || "#"}" ${wazeUrl ? "" : 'aria-disabled="true"'}>
+        <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 2C6.5 2 2 5.8 2 10.5c0 2.4 1.2 4.6 3.2 6.1-.2.9-.7 2-1.4 2.8-.2.2 0 .6.3.6 1.4-.1 3-.6 4-1.2 1.2.4 2.5.6 3.9.6 5.5 0 10-3.8 10-8.9S17.5 2 12 2z"/></svg>
+        Waze
+      </a>
       <a class="qa-btn" href="${mapsUrl || "#"}" target="_blank" rel="noopener" ${mapsUrl ? "" : 'aria-disabled="true"'}>
         <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 2a7 7 0 0 0-7 7c0 5.2 7 13 7 13s7-7.8 7-13a7 7 0 0 0-7-7zm0 9.5A2.5 2.5 0 1 1 12 6.5a2.5 2.5 0 0 1 0 5z"/></svg>
         Maps
-      </a>
-      <a class="qa-btn" href="${wazeUrl || "#"}" ${wazeUrl ? "" : 'aria-disabled="true"'}>
-        <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 2C6.5 2 2 5.8 2 10.5c0 2.4 1.2 4.6 3.2 6.1-.2.9-.7 2-1.4 2.8-.2.2 0 .6.3.6 1.4-.1 3-.6 4-1.2 1.2.4 2.5.6 3.9.6 5.5 0 10-3.8 10-8.9S17.5 2 12 2zM8.5 11a1.3 1.3 0 1 1 0-2.6 1.3 1.3 0 0 1 0 2.6zm7 0a1.3 1.3 0 1 1 0-2.6 1.3 1.3 0 0 1 0 2.6zm-6.6 2.4c.9.8 2 1.3 3.1 1.3s2.2-.5 3.1-1.3a.6.6 0 0 1 .8.9c-1.1 1-2.5 1.6-3.9 1.6s-2.8-.6-3.9-1.6a.6.6 0 0 1 .8-.9z"/></svg>
-        Waze
       </a>
       <a class="qa-btn" href="${telHref || "#"}" ${telHref ? "" : 'aria-disabled="true"'}>
         <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M6.6 10.8c1.4 2.7 3.6 4.9 6.3 6.3l2.1-2.1c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.5.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1C10.6 21 3 13.4 3 4c0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.2.2 2.4.6 3.5.1.4 0 .8-.2 1L6.6 10.8z"/></svg>
@@ -972,6 +1100,7 @@ async function openRdvDetail(id) {
       </a>
     </div>
 
+    <button class="btn-primary" id="honore-btn" style="width:100%;margin-bottom:10px;">✓ RDV honoré</button>
     <div class="sheet-actions">
       <button class="btn-secondary" id="edit-btn">Modifier</button>
       <button class="btn-danger" id="del-btn">Supprimer</button>
@@ -984,6 +1113,33 @@ async function openRdvDetail(id) {
     closeSheet();
     toast("Rendez-vous supprimé");
     render();
+  };
+  document.getElementById("honore-btn").onclick = () => openHonoreForm(r, client);
+}
+
+async function openHonoreForm(r, client) {
+  openSheet(`
+    <h2>RDV honoré</h2>
+    <p style="color:var(--smoke);font-size:13px;margin:-8px 0 14px;">${client ? escapeHtml(client.prenom) + " " + escapeHtml(client.nom) : ""} — ${fmtDateFR(r.date)}</p>
+    <p style="font-size:13.5px;color:var(--ink-dim);margin:0 0 14px;">Ce rendez-vous sera ajouté à l'historique du client, avec un compte-rendu si tu le souhaites.</p>
+    <div class="form-row"><label>Compte-rendu (facultatif)</label><textarea id="f-compte-rendu" placeholder="Ex : nettoyage complet, RAS...">${escapeHtml(r.commentaire || "")}</textarea></div>
+    <div class="sheet-actions">
+      <button class="btn-secondary" id="cancel-btn">Annuler</button>
+      <button class="btn-primary" id="confirm-btn">Valider</button>
+    </div>
+  `);
+  document.getElementById("cancel-btn").onclick = closeSheet;
+  document.getElementById("confirm-btn").onclick = async () => {
+    await DB.saveIntervention({
+      clientId: r.clientId,
+      date: r.date,
+      type: r.type,
+      description: document.getElementById("f-compte-rendu").value.trim(),
+    });
+    await DB.deleteRendezvous(r.id);
+    closeSheet();
+    toast("Rendez-vous honoré, ajouté à l'historique");
+    navigate("agenda");
   };
 }
 
@@ -1081,9 +1237,7 @@ function escapeAttr(str) { return escapeHtml(str); }
 // ---------- Service worker (offline) ----------
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
-    navigator.serviceWorker.register("sw.js").then((reg) => {
-      reg.update();
-    }).catch(() => {});
+    navigator.serviceWorker.register("sw.js").then((reg) => { reg.update(); }).catch(() => {});
   });
 }
 

@@ -16,7 +16,7 @@ function queueGeocode(fn) {
 async function geocodeAddress(address) {
   if (!address || !address.trim() || !navigator.onLine) return null;
   return queueGeocode(async () => {
-    const url = `${NOMINATIM_URL}?format=jsonv2&limit=1&q=${encodeURIComponent(address)}`;
+    const url = `${NOMINATIM_URL}?format=jsonv2&limit=1&countrycodes=fr&q=${encodeURIComponent(address)}`;
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), 8000);
     try {

@@ -8,11 +8,25 @@ const MOIS_COURT = ["janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "
 
 const state = {
   view: "accueil",
+  weekStart: startOfWeek(new Date()),
   clientId: null,
   clientSearch: "",
 };
 
 // ---------- Utilitaires date ----------
+function startOfWeek(d) {
+  const date = new Date(d);
+  const day = (date.getDay() + 6) % 7; // lundi = 0
+  date.setDate(date.getDate() - day);
+  date.setHours(0, 0, 0, 0);
+  return date;
+}
+function addDays(d, n) {
+  const r = new Date(d);
+  r.setDate(r.getDate() + n);
+  return r;
+}
+function isSameDay(a, b) { return toISO(a) === toISO(b); }
 function toISO(d) {
   const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, "0"), day = String(d.getDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
@@ -46,6 +60,8 @@ function navigate(view, clientId = null) {
   history.pushState(historySnapshot(), "", "#" + view);
   render();
 }
+let exitAllowed = false;
+
 window.addEventListener("popstate", (e) => {
   // Si une modale (sheet) est ouverte, le retour la ferme d'abord,
   // sans faire reculer la vue en dessous.
@@ -54,6 +70,14 @@ window.addEventListener("popstate", (e) => {
     history.pushState(historySnapshot(), "", location.hash || "#" + state.view);
     return;
   }
+  // Sur l'accueil, un retour supplémentaire quitterait l'appli : on demande confirmation
+  // au lieu de laisser faire, sauf si l'utilisateur vient de confirmer vouloir quitter.
+  if (state.view === "accueil" && !exitAllowed) {
+    history.pushState(historySnapshot(), "", "#accueil");
+    askExitConfirm();
+    return;
+  }
+  exitAllowed = false;
   if (e.state) {
     state.view = e.state.view;
     state.clientId = e.state.clientId || null;
@@ -63,6 +87,24 @@ window.addEventListener("popstate", (e) => {
   }
   render();
 });
+
+function askExitConfirm() {
+  openSheet(`
+    <h2>Quitter l'application ?</h2>
+    <p style="color:var(--smoke);font-size:14px;margin:-6px 0 4px;">Tu es sur l'écran d'accueil.</p>
+    <div class="sheet-actions">
+      <button class="btn-secondary" id="stay-btn">Rester</button>
+      <button class="btn-danger" id="exit-btn">Quitter</button>
+    </div>
+  `);
+  document.getElementById("stay-btn").onclick = () => closeSheet();
+  document.getElementById("exit-btn").onclick = () => {
+    closeSheet();
+    exitAllowed = true;
+    window.close();
+    history.back();
+  };
+}
 
 async function render() {
   document.querySelectorAll(".tab-btn").forEach((b) => {
@@ -121,46 +163,55 @@ async function renderAccueil() {
   root.querySelector('[data-nav="rdv-new"]').onclick = () => openRdvForm();
 }
 
-// ---------- Vue Agenda (liste chronologique, sans grille matin/après-midi) ----------
+// ---------- Vue Agenda (calendrier semaine, façon Google Agenda, sans horaires) ----------
 async function renderAgenda() {
-  const todayISO = toISO(new Date());
-  const all = await DB.listRendezvous();
-  const upcoming = all.filter((r) => r.date >= todayISO);
+  const days = Array.from({ length: 7 }, (_, i) => addDays(state.weekStart, i));
+  const startISO = toISO(days[0]), endISO = toISO(days[6]);
+  const weekRdvs = await DB.listRendezvousRange(startISO, endISO);
+  const byDate = {};
+  weekRdvs.forEach((r) => { (byDate[r.date] ||= []).push(r); });
 
   const clients = await DB.listClients();
   const clientMap = Object.fromEntries(clients.map((c) => [c.id, c]));
-
-  const byDate = {};
-  upcoming.forEach((r) => { (byDate[r.date] ||= []).push(r); });
-  const dates = Object.keys(byDate).sort();
+  const today = new Date();
 
   let html = `
-    <h2 class="view-heading">Prochains rendez-vous</h2>
-    <button class="btn-block-primary" id="btn-new-rdv">
-      <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z"/></svg>
-      Nouveau rendez-vous
-    </button>
+    <div class="week-nav">
+      <button id="week-prev" aria-label="Semaine précédente">
+        <svg viewBox="0 0 24 24" width="18" height="18"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M15 6l-6 6 6 6"/></svg>
+      </button>
+      <button id="week-today" class="week-label">${fmtShort(days[0])} – ${fmtShort(days[6])}</button>
+      <button id="week-next" aria-label="Semaine suivante">
+        <svg viewBox="0 0 24 24" width="18" height="18"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M9 6l6 6-6 6"/></svg>
+      </button>
+    </div>
   `;
 
-  if (dates.length === 0) {
-    html += `<div class="empty-state"><span class="emoji">📅</span>Aucun rendez-vous à venir.<br>Ajoute-en un avec le bouton ci-dessus.</div>`;
-  } else {
-    for (const date of dates) {
-      const items = byDate[date].slice().sort((a, b) => (a.ordre ?? 0) - (b.ordre ?? 0));
-      html += `<div class="day-group">
-        <div class="day-group-label">${dayLabel(date)}</div>
-        ${items.map((r, idx) => renderRdvCard(r, clientMap, idx === 0, idx === items.length - 1)).join("")}
-        ${items.length >= 2 ? `<button class="btn-optimize" data-optimize="${date}">
-          <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M12 2c1 3-1 4-1 6 0 1.2 1 2 2 2 1.3 0 2-1 2-2.2 1.6 1.4 3 3.7 3 6.2a6 6 0 0 1-12 0c0-2.6 1.1-4.3 2.3-6C9.2 6.3 10.5 4.4 12 2Z"/></svg>
-          Optimiser le trajet (${items.length} clients)
-        </button>` : ""}
-      </div>`;
-    }
+  for (const d of days) {
+    const iso = toISO(d);
+    const isToday = isSameDay(d, today);
+    const items = (byDate[iso] || []).slice().sort((a, b) => (a.ordre ?? 0) - (b.ordre ?? 0));
+
+    html += `<div class="day-group">
+      <div class="day-group-head">
+        <span class="day-group-label ${isToday ? "is-today" : ""}">${dayLabel(iso)}${isToday ? " · Aujourd'hui" : ""}</span>
+      </div>
+      ${items.length >= 2 ? `<button class="btn-optimize" data-optimize="${iso}">
+        <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M12 2c1 3-1 4-1 6 0 1.2 1 2 2 2 1.3 0 2-1 2-2.2 1.6 1.4 3 3.7 3 6.2a6 6 0 0 1-12 0c0-2.6 1.1-4.3 2.3-6C9.2 6.3 10.5 4.4 12 2Z"/></svg>
+        Optimiser le trajet (${items.length} clients)
+      </button>` : ""}
+      ${items.length === 0
+        ? `<button class="day-empty-add" data-add="${iso}">+ Ajouter un rendez-vous</button>`
+        : items.map((r, idx) => renderRdvCard(r, clientMap, idx === 0, idx === items.length - 1)).join("")}
+    </div>`;
   }
 
   root.innerHTML = html;
 
-  document.getElementById("btn-new-rdv").onclick = () => openRdvForm();
+  document.getElementById("week-prev").onclick = () => { state.weekStart = addDays(state.weekStart, -7); render(); };
+  document.getElementById("week-next").onclick = () => { state.weekStart = addDays(state.weekStart, 7); render(); };
+  document.getElementById("week-today").onclick = () => { state.weekStart = startOfWeek(new Date()); render(); };
+
   root.querySelectorAll(".rdv-card-body").forEach((el) => {
     el.onclick = () => openRdvDetail(el.dataset.rdv);
   });
@@ -172,6 +223,9 @@ async function renderAgenda() {
   });
   root.querySelectorAll("[data-optimize]").forEach((el) => {
     el.onclick = () => optimizeDay(el.dataset.optimize);
+  });
+  root.querySelectorAll("[data-add]").forEach((el) => {
+    el.onclick = () => openRdvForm({ date: el.dataset.add });
   });
 }
 
@@ -213,7 +267,77 @@ async function moveRdv(id, direction) {
   render();
 }
 
+const DOMICILE_ADRESSE = "41 avenue Maréchal Foch, 76290 Montivilliers";
+
+async function getDomicileCoords() {
+  const cached = await DB.getParam("domicileCoords", null);
+  if (cached && cached.lat != null) return cached;
+  const coords = await geocodeAddress(DOMICILE_ADRESSE);
+  if (coords) await DB.setParam("domicileCoords", coords);
+  return coords;
+}
+
+function getCurrentPosition() {
+  return new Promise((resolve) => {
+    if (!navigator.geolocation) return resolve(null);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => resolve({ lat: pos.coords.latitude, lon: pos.coords.longitude }),
+      () => resolve(null),
+      { enableHighAccuracy: true, timeout: 8000 }
+    );
+  });
+}
+
 async function optimizeDay(dateISO) {
+  const departRaw = await DB.getParam("pointDepart", null);
+  const hasSavedDepart = departRaw && departRaw.adresse;
+
+  openSheet(`
+    <h2>Point de départ</h2>
+    <p style="color:var(--smoke);font-size:13px;margin:-6px 0 14px;">D'où pars-tu pour cette tournée ?</p>
+    ${hasSavedDepart ? `<button class="choice-tile" id="opt-saved">
+      <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 2a7 7 0 0 0-7 7c0 5.2 7 13 7 13s7-7.8 7-13a7 7 0 0 0-7-7zm0 9.5A2.5 2.5 0 1 1 12 6.5a2.5 2.5 0 0 1 0 5z"/></svg>
+      <span>${escapeHtml(departRaw.adresse)}<span class="sub">Point de départ enregistré</span></span>
+    </button>` : ""}
+    <button class="choice-tile" id="opt-domicile">
+      <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 3l9 8h-3v9h-5v-6H11v6H6v-9H3z"/></svg>
+      <span>Domicile<span class="sub">${DOMICILE_ADRESSE}</span></span>
+    </button>
+    <button class="choice-tile" id="opt-gps">
+      <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 2a1 1 0 0 1 1 1v1.06A8 8 0 0 1 20 12a1 1 0 1 1 0 2 8 8 0 0 1-7 6.94V22a1 1 0 1 1-2 0v-1.06A8 8 0 0 1 4 14a1 1 0 1 1 0-2 8 8 0 0 1 7-6.94V3a1 1 0 0 1 1-1zm0 5.5A4.5 4.5 0 1 0 12 16a4.5 4.5 0 0 0 0-8.5zm0 2.5a2 2 0 1 1 0 4 2 2 0 0 1 0-4z"/></svg>
+      <span>Ma position actuelle<span class="sub">Géolocaliser le téléphone maintenant</span></span>
+    </button>
+    <button class="choice-tile" id="opt-none">
+      <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 12a5 5 0 1 0 0-10 5 5 0 0 0 0 10zm0 2c-4.4 0-8 2.2-8 5v3h16v-3c0-2.8-3.6-5-8-5z"/></svg>
+      <span>Sans point de départ<span class="sub">Commencer par le client le plus proche</span></span>
+    </button>
+  `);
+
+  if (hasSavedDepart) {
+    document.getElementById("opt-saved").onclick = async () => {
+      closeSheet();
+      const coords = departRaw.lat != null ? { lat: departRaw.lat, lon: departRaw.lon } : await geocodeAddress(departRaw.adresse);
+      runOptimize(dateISO, coords);
+    };
+  }
+  document.getElementById("opt-domicile").onclick = async () => {
+    closeSheet();
+    toast("Localisation du domicile…");
+    const coords = await getDomicileCoords();
+    if (!coords) { toast("Géocodage du domicile impossible (hors ligne ?)"); return; }
+    runOptimize(dateISO, coords);
+  };
+  document.getElementById("opt-gps").onclick = async () => {
+    closeSheet();
+    toast("Localisation en cours…");
+    const coords = await getCurrentPosition();
+    if (!coords) { toast("Localisation indisponible"); return; }
+    runOptimize(dateISO, coords);
+  };
+  document.getElementById("opt-none").onclick = () => { closeSheet(); runOptimize(dateISO, null); };
+}
+
+async function runOptimize(dateISO, depart) {
   const rdvs = (await DB.listRendezvous()).filter((r) => r.date === dateISO);
   const clients = await DB.listClients();
   const cmap = Object.fromEntries(clients.map((c) => [c.id, c]));
@@ -230,8 +354,6 @@ async function optimizeDay(dateISO) {
     return;
   }
 
-  const departRaw = await DB.getParam("pointDepart", null);
-  const depart = departRaw && departRaw.lat != null ? { lat: departRaw.lat, lon: departRaw.lon } : null;
   const roundtrip = !!(await DB.getParam("retourDepart", false));
 
   toast("Calcul de l'itinéraire…");

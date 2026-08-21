@@ -2,7 +2,7 @@
    Vues : Accueil / Agenda / Clients / Fiche client / Paramètres
    Toute la donnée passe par DB (db.js → IndexedDB). */
 
-const APP_VERSION = "1.3.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
+const APP_VERSION = "1.4.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
 
 const JOURS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
 const JOURS_COURT = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
@@ -336,16 +336,9 @@ function getCurrentPosition() {
 }
 
 async function optimizeDay(dateISO) {
-  const departRaw = await DB.getParam("pointDepart", null);
-  const hasSavedDepart = departRaw && departRaw.adresse;
-
   openSheet(`
     <h2>Point de départ</h2>
     <p style="color:var(--smoke);font-size:13px;margin:-6px 0 14px;">D'où pars-tu pour cette tournée ?</p>
-    ${hasSavedDepart ? `<button class="choice-tile" id="opt-saved">
-      <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 2a7 7 0 0 0-7 7c0 5.2 7 13 7 13s7-7.8 7-13a7 7 0 0 0-7-7zm0 9.5A2.5 2.5 0 1 1 12 6.5a2.5 2.5 0 0 1 0 5z"/></svg>
-      <span>${escapeHtml(departRaw.adresse)}<span class="sub">Point de départ enregistré</span></span>
-    </button>` : ""}
     <button class="choice-tile" id="opt-domicile">
       <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 3l9 8h-3v9h-5v-6H11v6H6v-9H3z"/></svg>
       <span>Domicile<span class="sub">${DOMICILE_ADRESSE}</span></span>
@@ -360,13 +353,6 @@ async function optimizeDay(dateISO) {
     </button>
   `);
 
-  if (hasSavedDepart) {
-    document.getElementById("opt-saved").onclick = async () => {
-      closeSheet();
-      const coords = departRaw.lat != null ? { lat: departRaw.lat, lon: departRaw.lon } : await geocodeAddress(departRaw.adresse);
-      runOptimize(dateISO, coords);
-    };
-  }
   document.getElementById("opt-domicile").onclick = async () => {
     closeSheet();
     toast("Localisation du domicile…");
@@ -499,7 +485,7 @@ async function renderFiche() {
       <p class="fname">${escapeHtml(c.prenom)} ${escapeHtml(c.nom)}</p>
       <p class="faddr">${escapeHtml(c.adresse || "Adresse non renseignée")}</p>
       ${c.adresse ? (c.lat != null
-        ? '<p class="geo-status geo-ok">📍 Adresse localisée</p>'
+        ? `<p class="geo-status geo-ok">📍 Adresse localisée <a href="https://www.openstreetmap.org/?mlat=${c.lat}&mlon=${c.lon}&zoom=17" target="_blank" rel="noopener" class="link-btn" style="text-decoration:underline;">Voir sur la carte</a></p>`
         : '<p class="geo-status geo-pending">⚠️ Adresse pas encore géocodée <button class="link-btn" id="retry-geo-btn">Réessayer</button></p>') : ""}
     </div>
 
@@ -620,8 +606,6 @@ function labelMateriel(v) {
 
 // ---------- Paramètres ----------
 async function renderReglages() {
-  const departRaw = await DB.getParam("pointDepart", null);
-  const depart = typeof departRaw === "string" ? { adresse: departRaw, lat: null, lon: null } : (departRaw || { adresse: "", lat: null, lon: null });
   const retourDepart = await DB.getParam("retourDepart", false);
   const clientsSansGeo = (await DB.listClients()).filter((c) => c.adresse && c.lat == null).length;
   const lastExportAt = await DB.getParam("lastExportAt", null);
@@ -636,20 +620,15 @@ async function renderReglages() {
     </div>
 
     <div class="info-block">
-      <h3>Point de départ</h3>
-      <div class="form-row" style="margin-bottom:8px;">
-        <label for="depart-input">Domicile / atelier</label>
-        <input type="text" id="depart-input" value="${escapeHtml(depart.adresse)}" placeholder="Adresse de départ pour les tournées" />
-        ${depart.adresse ? (depart.lat != null ? '<p class="geo-status geo-ok">📍 Adresse localisée</p>' : '<p class="geo-status geo-pending">⚠️ Pas encore géocodée</p>') : ""}
-      </div>
-      <div class="form-row">
+      <h3>Trajet</h3>
+      <p style="font-size:13.5px;color:var(--smoke);margin:0 0 10px;">Le point de départ (Domicile ou position actuelle) se choisit à chaque optimisation, directement depuis l'agenda.</p>
+      <div class="form-row" style="margin-bottom:0;">
         <label>En fin de tournée</label>
         <div class="pill-choice" id="f-retour">
           <button type="button" data-val="0" class="${!retourDepart ? "active period-active" : ""}">Terminer chez le dernier client</button>
           <button type="button" data-val="1" class="${retourDepart ? "active period-active" : ""}">Revenir au départ</button>
         </div>
       </div>
-      <button class="btn-primary" id="save-depart" style="width:100%;">Enregistrer</button>
     </div>
 
     <div class="info-block">
@@ -671,35 +650,14 @@ async function renderReglages() {
     </div>
   `;
 
-  let selRetour = retourDepart ? "1" : "0";
   document.querySelectorAll("#f-retour button").forEach((b) => {
-    b.onclick = () => {
-      selRetour = b.dataset.val;
+    b.onclick = async () => {
       document.querySelectorAll("#f-retour button").forEach((x) => x.classList.remove("active", "period-active"));
       b.classList.add("active", "period-active");
+      await DB.setParam("retourDepart", b.dataset.val === "1");
+      toast("Paramètres enregistrés");
     };
   });
-
-  document.getElementById("save-depart").onclick = async () => {
-    const adresse = document.getElementById("depart-input").value.trim();
-    const addressChanged = adresse !== depart.adresse;
-    const newDepart = { adresse, lat: addressChanged ? null : depart.lat, lon: addressChanged ? null : depart.lon };
-    await DB.setParam("pointDepart", newDepart);
-    await DB.setParam("retourDepart", selRetour === "1");
-    toast("Paramètres enregistrés");
-    if (adresse && (addressChanged || newDepart.lat == null)) {
-      geocodeAddress(adresse).then(async (coords) => {
-        if (!coords) return;
-        const current = await DB.getParam("pointDepart", null);
-        if (current && current.adresse === adresse) {
-          await DB.setParam("pointDepart", { adresse, lat: coords.lat, lon: coords.lon });
-          if (state.view === "reglages") render();
-        }
-      });
-    } else {
-      render();
-    }
-  };
 
   document.getElementById("geocode-all-btn").onclick = async () => {
     const clients = (await DB.listClients()).filter((c) => c.adresse && c.lat == null);

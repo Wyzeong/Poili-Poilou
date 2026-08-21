@@ -150,6 +150,10 @@ async function renderAgenda() {
       html += `<div class="day-group">
         <div class="day-group-label">${dayLabel(date)}</div>
         ${items.map((r, idx) => renderRdvCard(r, clientMap, idx === 0, idx === items.length - 1)).join("")}
+        ${items.length >= 2 ? `<button class="btn-optimize" data-optimize="${date}">
+          <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M12 2c1 3-1 4-1 6 0 1.2 1 2 2 2 1.3 0 2-1 2-2.2 1.6 1.4 3 3.7 3 6.2a6 6 0 0 1-12 0c0-2.6 1.1-4.3 2.3-6C9.2 6.3 10.5 4.4 12 2Z"/></svg>
+          Optimiser le trajet (${items.length} clients)
+        </button>` : ""}
       </div>`;
     }
   }
@@ -165,6 +169,9 @@ async function renderAgenda() {
       e.stopPropagation();
       moveRdv(el.dataset.rdv, el.dataset.move);
     };
+  });
+  root.querySelectorAll("[data-optimize]").forEach((el) => {
+    el.onclick = () => optimizeDay(el.dataset.optimize);
   });
 }
 
@@ -204,6 +211,53 @@ async function moveRdv(id, direction) {
   await DB.saveRendezvous(a);
   await DB.saveRendezvous(b);
   render();
+}
+
+async function optimizeDay(dateISO) {
+  const rdvs = (await DB.listRendezvous()).filter((r) => r.date === dateISO);
+  const clients = await DB.listClients();
+  const cmap = Object.fromEntries(clients.map((c) => [c.id, c]));
+
+  const points = [];
+  let missing = 0;
+  for (const r of rdvs) {
+    const c = cmap[r.clientId];
+    if (c && c.lat != null) points.push({ id: r.id, lat: c.lat, lon: c.lon, name: `${c.prenom} ${c.nom}` });
+    else missing++;
+  }
+  if (points.length < 2) {
+    toast("Il faut au moins 2 clients géocodés ce jour-là");
+    return;
+  }
+
+  const departRaw = await DB.getParam("pointDepart", null);
+  const depart = departRaw && departRaw.lat != null ? { lat: departRaw.lat, lon: departRaw.lon } : null;
+  const roundtrip = !!(await DB.getParam("retourDepart", false));
+
+  toast("Calcul de l'itinéraire…");
+  const result = await optimizeTrip(points, depart, roundtrip);
+
+  for (const rdvId of result.order) {
+    const r = rdvs.find((x) => x.id === rdvId);
+    if (r) r.ordre = result.order.indexOf(rdvId);
+  }
+  for (const r of rdvs) if (r.ordre != null && points.some((p) => p.id === r.id)) await DB.saveRendezvous(r);
+
+  const names = result.order.map((id) => points.find((p) => p.id === id)?.name).filter(Boolean);
+  const steps = depart ? ["Départ", ...names] : names;
+
+  openSheet(`
+    <h2>Trajet optimisé</h2>
+    ${missing > 0 ? `<p style="color:var(--smoke);font-size:12.5px;margin:-8px 0 12px;">${missing} client(s) non géocodé(s) ignoré(s) — ordre non garanti pour eux.</p>` : ""}
+    ${result.estimated ? `<p style="color:var(--ember);font-size:12.5px;margin:-4px 0 12px;">⚠️ Calcul routier indisponible — estimation à vol d'oiseau.</p>` : ""}
+    <div class="near-list">
+      ${steps.map((n, i) => `<div class="near-item"><span>${i + 1}. ${escapeHtml(n)}</span></div>`).join("")}
+    </div>
+    <div class="info-row" style="margin-top:10px;"><span class="k">Distance totale</span><span class="v">${result.distanceKm.toFixed(1)} km</span></div>
+    ${result.durationMin != null ? `<div class="info-row"><span class="k">Durée estimée</span><span class="v">${Math.round(result.durationMin)} min</span></div>` : ""}
+    <div class="sheet-actions"><button class="btn-primary" id="ok-btn" style="width:100%;">OK</button></div>
+  `);
+  document.getElementById("ok-btn").onclick = () => { closeSheet(); render(); };
 }
 
 // ---------- Vue Clients ----------
@@ -272,6 +326,9 @@ async function renderFiche() {
     <div class="fiche-head">
       <p class="fname">${escapeHtml(c.prenom)} ${escapeHtml(c.nom)}</p>
       <p class="faddr">${escapeHtml(c.adresse || "Adresse non renseignée")}</p>
+      ${c.adresse ? (c.lat != null
+        ? '<p class="geo-status geo-ok">📍 Adresse localisée</p>'
+        : '<p class="geo-status geo-pending">⚠️ Adresse pas encore géocodée</p>') : ""}
     </div>
 
     <div class="quick-actions">
@@ -360,16 +417,36 @@ function labelMateriel(v) {
 
 // ---------- Réglages ----------
 async function renderReglages() {
-  const depart = (await DB.getParam("pointDepart", "")) || "";
+  const departRaw = await DB.getParam("pointDepart", null);
+  const depart = typeof departRaw === "string" ? { adresse: departRaw, lat: null, lon: null } : (departRaw || { adresse: "", lat: null, lon: null });
+  const retourDepart = await DB.getParam("retourDepart", false);
+  const clientsSansGeo = (await DB.listClients()).filter((c) => c.adresse && c.lat == null).length;
+
   root.innerHTML = `
     <h2 class="view-heading">Réglages</h2>
     <div class="info-block">
       <h3>Point de départ</h3>
       <div class="form-row" style="margin-bottom:8px;">
         <label for="depart-input">Domicile / atelier</label>
-        <input type="text" id="depart-input" value="${escapeHtml(depart)}" placeholder="Adresse de départ pour les tournées" />
+        <input type="text" id="depart-input" value="${escapeHtml(depart.adresse)}" placeholder="Adresse de départ pour les tournées" />
+        ${depart.adresse ? (depart.lat != null ? '<p class="geo-status geo-ok">📍 Adresse localisée</p>' : '<p class="geo-status geo-pending">⚠️ Pas encore géocodée</p>') : ""}
+      </div>
+      <div class="form-row">
+        <label>En fin de tournée</label>
+        <div class="pill-choice" id="f-retour">
+          <button type="button" data-val="0" class="${!retourDepart ? "active period-active" : ""}">Terminer chez le dernier client</button>
+          <button type="button" data-val="1" class="${retourDepart ? "active period-active" : ""}">Revenir au départ</button>
+        </div>
       </div>
       <button class="btn-primary" id="save-depart" style="width:100%;">Enregistrer</button>
+    </div>
+
+    <div class="info-block">
+      <h3>Géocodage</h3>
+      <p style="font-size:13.5px;color:var(--smoke);margin:0 0 12px;">
+        ${clientsSansGeo > 0 ? `${clientsSansGeo} adresse(s) client en attente de géocodage.` : "Toutes les adresses connues sont géocodées."}
+      </p>
+      <button class="btn-secondary" id="geocode-all-btn" style="width:100%;" ${clientsSansGeo === 0 ? "disabled" : ""}>Géocoder les adresses en attente</button>
     </div>
 
     <div class="info-block">
@@ -385,14 +462,58 @@ async function renderReglages() {
     <div class="info-block">
       <h3>À venir</h3>
       <p style="font-size:13.5px;color:var(--smoke);line-height:1.5;margin:0;">
-        Géocodage automatique des adresses, rendez-vous proches suggérés, optimisation du trajet du jour, et sauvegarde automatique sur le cloud.
+        Sauvegarde automatique sur le cloud.
       </p>
     </div>
   `;
 
+  let selRetour = retourDepart ? "1" : "0";
+  document.querySelectorAll("#f-retour button").forEach((b) => {
+    b.onclick = () => {
+      selRetour = b.dataset.val;
+      document.querySelectorAll("#f-retour button").forEach((x) => x.classList.remove("active", "period-active"));
+      b.classList.add("active", "period-active");
+    };
+  });
+
   document.getElementById("save-depart").onclick = async () => {
-    await DB.setParam("pointDepart", document.getElementById("depart-input").value.trim());
-    toast("Point de départ enregistré");
+    const adresse = document.getElementById("depart-input").value.trim();
+    const addressChanged = adresse !== depart.adresse;
+    const newDepart = { adresse, lat: addressChanged ? null : depart.lat, lon: addressChanged ? null : depart.lon };
+    await DB.setParam("pointDepart", newDepart);
+    await DB.setParam("retourDepart", selRetour === "1");
+    toast("Réglages enregistrés");
+    if (adresse && (addressChanged || newDepart.lat == null)) {
+      geocodeAddress(adresse).then(async (coords) => {
+        if (!coords) return;
+        const current = await DB.getParam("pointDepart", null);
+        if (current && current.adresse === adresse) {
+          await DB.setParam("pointDepart", { adresse, lat: coords.lat, lon: coords.lon });
+          if (state.view === "reglages") render();
+        }
+      });
+    } else {
+      render();
+    }
+  };
+
+  document.getElementById("geocode-all-btn").onclick = async () => {
+    const clients = (await DB.listClients()).filter((c) => c.adresse && c.lat == null);
+    let done = 0;
+    toast(`Géocodage en cours… (0/${clients.length})`);
+    for (const c of clients) {
+      const coords = await geocodeAddress(c.adresse);
+      const fresh = await DB.getClient(c.id);
+      if (fresh) {
+        if (coords) { fresh.lat = coords.lat; fresh.lon = coords.lon; fresh.geocodeStatus = "ok"; }
+        else { fresh.geocodeStatus = "pending"; }
+        await DB.saveClient(fresh);
+      }
+      done++;
+      toast(`Géocodage en cours… (${done}/${clients.length})`);
+    }
+    toast("Géocodage terminé ✓");
+    if (state.view === "reglages") render();
   };
 
   document.getElementById("export-btn").onclick = async () => {
@@ -522,6 +643,19 @@ async function openClientForm(existing) {
     closeSheet();
     toast(existing ? "Client mis à jour" : "Client créé");
     navigate("fiche", saved.id);
+
+    // Géocodage en arrière-plan : ne bloque jamais l'enregistrement du client.
+    const addressChanged = !existing || existing.adresse !== client.adresse;
+    if (client.adresse && (addressChanged || saved.lat == null)) {
+      geocodeAddress(client.adresse).then(async (coords) => {
+        const fresh = await DB.getClient(saved.id);
+        if (!fresh) return;
+        if (coords) { fresh.lat = coords.lat; fresh.lon = coords.lon; fresh.geocodeStatus = "ok"; }
+        else { fresh.geocodeStatus = "pending"; }
+        await DB.saveClient(fresh);
+        if (state.view === "fiche" && state.clientId === saved.id) render();
+      });
+    }
   };
 }
 
@@ -543,6 +677,44 @@ async function confirmDeleteClient(c) {
     toast("Client supprimé");
     navigate("clients");
   };
+}
+
+async function renderNearbyHtml(clientId, dateISO, excludeRdvId) {
+  if (!clientId || !dateISO) return "";
+  const client = await DB.getClient(clientId);
+  if (!client) return "";
+  if (client.lat == null) {
+    return `<p class="near-hint">📍 Ce client n'est pas encore géocodé — les rendez-vous proches ne peuvent pas être calculés.</p>`;
+  }
+  const start = new Date(dateISO);
+  const end = new Date(dateISO);
+  end.setDate(end.getDate() + 90);
+  const startISO = toISO(start), endISO = toISO(end);
+
+  const all = await DB.listRendezvous();
+  const clients = await DB.listClients();
+  const cmap = Object.fromEntries(clients.map((c) => [c.id, c]));
+
+  const candidates = all.filter((r) => r.id !== excludeRdvId && r.clientId !== clientId && r.date >= startISO && r.date <= endISO);
+  const withDist = candidates
+    .map((r) => {
+      const rc = cmap[r.clientId];
+      if (!rc || rc.lat == null) return null;
+      return { date: r.date, name: `${rc.prenom} ${rc.nom}`, distKm: haversineKm(client.lat, client.lon, rc.lat, rc.lon) };
+    })
+    .filter((x) => x && x.distKm <= 15)
+    .sort((a, b) => a.distKm - b.distKm)
+    .slice(0, 5);
+
+  if (withDist.length === 0) return "";
+  return `
+    <div class="info-block" style="margin-top:2px;">
+      <h3>Rendez-vous proches (90 prochains jours)</h3>
+      <div class="near-list">
+        ${withDist.map((x) => `<div class="near-item"><span>${fmtDateFR(x.date)} — ${escapeHtml(x.name)}</span><span class="dist">${x.distKm.toFixed(1)} km</span></div>`).join("")}
+      </div>
+    </div>
+  `;
 }
 
 // ---------- Formulaire rendez-vous ----------
@@ -583,12 +755,23 @@ async function openRdvForm(prefill = {}, existing) {
       </div>
     </div>
     <div class="form-row"><label>Commentaire (facultatif)</label><textarea id="f-comment">${escapeHtml(r.commentaire || "")}</textarea></div>
+    <div id="near-container"></div>
     <div class="sheet-actions">
       <button class="btn-secondary" id="cancel-btn">Annuler</button>
       <button class="btn-primary" id="save-btn">Enregistrer</button>
     </div>
     ${existing ? `<button class="btn-danger" id="del-btn" style="width:100%;margin-top:10px;">Supprimer le rendez-vous</button>` : ""}
   `);
+
+  const nearContainer = document.getElementById("near-container");
+  async function refreshNearby() {
+    const clientId = document.getElementById("f-client").value;
+    const dateVal = document.getElementById("f-date").value;
+    nearContainer.innerHTML = await renderNearbyHtml(clientId, dateVal, existing ? existing.id : null);
+  }
+  document.getElementById("f-client").onchange = refreshNearby;
+  document.getElementById("f-date").onchange = refreshNearby;
+  refreshNearby();
 
   let selPeriode = periode, selType = type;
   document.querySelectorAll("#f-periode button").forEach((b) => {
@@ -633,7 +816,53 @@ async function openRdvForm(prefill = {}, existing) {
 async function openRdvDetail(id) {
   const r = await DB.getRendezvous(id);
   if (!r) return;
-  openRdvForm({}, r);
+  const client = await DB.getClient(r.clientId);
+  const addr = r.adresse || (client && client.adresse) || "";
+  const mapsUrl = addr ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(addr)}` : null;
+  const wazeUrl = addr ? `https://waze.com/ul?q=${encodeURIComponent(addr)}&navigate=yes` : null;
+  const telHref = client && client.telephone ? `tel:${client.telephone.replace(/\s+/g, "")}` : null;
+  const smsBody = client ? encodeURIComponent(`Bonjour ${client.prenom}, je suis en route pour notre rendez-vous. À tout de suite.`) : "";
+  const smsHref = client && client.telephone ? `sms:${client.telephone.replace(/\s+/g, "")}?body=${smsBody}` : null;
+  const period = periodLabel(r.periode);
+
+  openSheet(`
+    <h2>${client ? escapeHtml(client.prenom) + " " + escapeHtml(client.nom) : "Rendez-vous"}</h2>
+    <p style="color:var(--smoke);font-size:13px;margin:-10px 0 4px;">${fmtDateFR(r.date)}${period ? " · " + period : ""} · ${r.type === "entretien" ? "Entretien" : "Dépannage"}</p>
+    ${addr ? `<p style="font-size:13.5px;color:var(--ink-dim);margin:0 0 4px;">📍 ${escapeHtml(addr)}</p>` : ""}
+    ${r.commentaire ? `<p style="font-size:13.5px;color:var(--ink-dim);margin:0 0 4px;">${escapeHtml(r.commentaire)}</p>` : ""}
+
+    <div class="quick-actions">
+      <a class="qa-btn" href="${mapsUrl || "#"}" target="_blank" rel="noopener" ${mapsUrl ? "" : 'aria-disabled="true"'}>
+        <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 2a7 7 0 0 0-7 7c0 5.2 7 13 7 13s7-7.8 7-13a7 7 0 0 0-7-7zm0 9.5A2.5 2.5 0 1 1 12 6.5a2.5 2.5 0 0 1 0 5z"/></svg>
+        Maps
+      </a>
+      <a class="qa-btn" href="${wazeUrl || "#"}" ${wazeUrl ? "" : 'aria-disabled="true"'}>
+        <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 2C6.5 2 2 5.8 2 10.5c0 2.4 1.2 4.6 3.2 6.1-.2.9-.7 2-1.4 2.8-.2.2 0 .6.3.6 1.4-.1 3-.6 4-1.2 1.2.4 2.5.6 3.9.6 5.5 0 10-3.8 10-8.9S17.5 2 12 2zM8.5 11a1.3 1.3 0 1 1 0-2.6 1.3 1.3 0 0 1 0 2.6zm7 0a1.3 1.3 0 1 1 0-2.6 1.3 1.3 0 0 1 0 2.6zm-6.6 2.4c.9.8 2 1.3 3.1 1.3s2.2-.5 3.1-1.3a.6.6 0 0 1 .8.9c-1.1 1-2.5 1.6-3.9 1.6s-2.8-.6-3.9-1.6a.6.6 0 0 1 .8-.9z"/></svg>
+        Waze
+      </a>
+      <a class="qa-btn" href="${telHref || "#"}" ${telHref ? "" : 'aria-disabled="true"'}>
+        <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M6.6 10.8c1.4 2.7 3.6 4.9 6.3 6.3l2.1-2.1c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.5.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1C10.6 21 3 13.4 3 4c0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.2.2 2.4.6 3.5.1.4 0 .8-.2 1L6.6 10.8z"/></svg>
+        Appeler
+      </a>
+      <a class="qa-btn" href="${smsHref || "#"}" ${smsHref ? "" : 'aria-disabled="true"'}>
+        <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M4 4h16v12H7l-3 3V4z"/></svg>
+        SMS
+      </a>
+    </div>
+
+    <div class="sheet-actions">
+      <button class="btn-secondary" id="edit-btn">Modifier</button>
+      <button class="btn-danger" id="del-btn">Supprimer</button>
+    </div>
+  `);
+
+  document.getElementById("edit-btn").onclick = () => openRdvForm({}, r);
+  document.getElementById("del-btn").onclick = async () => {
+    await DB.deleteRendezvous(r.id);
+    closeSheet();
+    toast("Rendez-vous supprimé");
+    render();
+  };
 }
 
 // ---------- Formulaire intervention ----------

@@ -1,199 +1,220 @@
 /* app.js — SPA légère, sans framework, 100% locale.
-   Vues : Agenda / Clients / Fiche client / Réglages
+   Vues : Accueil / Agenda / Clients / Fiche client / Réglages
    Toute la donnée passe par DB (db.js → IndexedDB). */
 
 const JOURS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
-const MOIS = ["janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "sept.", "oct.", "nov.", "déc."];
+const MOIS = ["janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre", "novembre", "décembre"];
+const MOIS_COURT = ["janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "sept.", "oct.", "nov.", "déc."];
 
 const state = {
-  view: "agenda",
-  weekStart: startOfWeek(new Date()),
+  view: "accueil",
   clientId: null,
   clientSearch: "",
 };
 
 // ---------- Utilitaires date ----------
-function startOfWeek(d) {
-  const date = new Date(d);
-  const day = (date.getDay() + 6) % 7; // lundi = 0
-  date.setDate(date.getDate() - day);
-  date.setHours(0, 0, 0, 0);
-  return date;
-}
-function addDays(d, n) {
-  const r = new Date(d);
-  r.setDate(r.getDate() + n);
-  return r;
-}
 function toISO(d) {
   const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, "0"), day = String(d.getDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
 }
-function isSameDay(a, b) { return toISO(a) === toISO(b); }
-function fmtShort(d) { return `${d.getDate()} ${MOIS[d.getMonth()]}`; }
+function fmtShort(d) { return `${d.getDate()} ${MOIS_COURT[d.getMonth()]}`; }
 function fmtDateFR(iso) {
   const [y, m, d] = iso.split("-").map(Number);
-  return `${d} ${MOIS[m - 1]} ${y}`;
+  return `${d} ${MOIS_COURT[m - 1]} ${y}`;
 }
+function dayLabel(iso) {
+  const [y, m, d] = iso.split("-").map(Number);
+  const date = new Date(y, m - 1, d);
+  return `${JOURS[(date.getDay() + 6) % 7]} ${d} ${MOIS[m - 1]}`.toUpperCase();
+}
+function periodLabel(p) { return p === "matin" ? "Matin" : p === "apres-midi" ? "Après-midi" : ""; }
 
 // ---------- Rendu racine ----------
 const root = document.getElementById("view-root");
-const title = document.getElementById("page-title");
 const btnToday = document.getElementById("btn-today");
 
 async function render() {
   document.querySelectorAll(".tab-btn").forEach((b) => {
     b.classList.toggle("active", b.dataset.view === state.view || (state.view === "fiche" && b.dataset.view === "clients"));
   });
-  btnToday.hidden = state.view !== "agenda";
+  btnToday.hidden = true;
 
-  if (state.view === "agenda") { title.textContent = "Agenda"; await renderAgenda(); }
-  else if (state.view === "clients") { title.textContent = "Clients"; await renderClients(); }
-  else if (state.view === "fiche") { await renderFiche(); }
-  else if (state.view === "reglages") { title.textContent = "Réglages"; await renderReglages(); }
+  if (state.view === "accueil") await renderAccueil();
+  else if (state.view === "agenda") await renderAgenda();
+  else if (state.view === "clients") await renderClients();
+  else if (state.view === "fiche") await renderFiche();
+  else if (state.view === "reglages") await renderReglages();
 
   root.scrollTop = 0;
 }
 
-// ---------- Vue Agenda ----------
-async function renderAgenda() {
-  const days = Array.from({ length: 7 }, (_, i) => addDays(state.weekStart, i));
-  const startISO = toISO(days[0]), endISO = toISO(days[6]);
-  const rdvs = await DB.listRendezvousRange(startISO, endISO);
-  const byDate = {};
-  rdvs.forEach((r) => { (byDate[r.date] ||= []).push(r); });
+// ---------- Vue Accueil ----------
+async function renderAccueil() {
+  const rdvs = await DB.listRendezvous();
+  const todayISO = toISO(new Date());
+  const upcoming = rdvs.filter((r) => r.date >= todayISO).length;
 
-  const clients = await DB.listClients();
-  const clientMap = Object.fromEntries(clients.map((c) => [c.id, c]));
-
-  const today = new Date();
-  const weekEnd = addDays(state.weekStart, 6);
-
-  let html = `
-    <div class="week-nav">
-      <button id="week-prev" aria-label="Semaine précédente">
-        <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M15 6l-6 6 6 6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+  root.innerHTML = `
+    <p class="home-greeting">${upcoming > 0 ? `${upcoming} rendez-vous à venir` : "Aucun rendez-vous planifié pour l'instant"}</p>
+    <div class="home-buttons">
+      <button class="home-btn accent" data-nav="agenda">
+        <span class="hb-icon"><svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M7 2v2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-2V2h-2v2H9V2H7zM5 9h14v11H5V9z"/></svg></span>
+        <span class="hb-text">
+          <span class="hb-title">Agenda</span>
+          <span class="hb-sub">Voir les prochains rendez-vous</span>
+        </span>
+        <svg class="hb-chev" viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </button>
-      <span class="week-label">${fmtShort(days[0])} — ${fmtShort(days[6])}</span>
-      <button id="week-next" aria-label="Semaine suivante">
-        <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <button class="home-btn" data-nav="rdv-new">
+        <span class="hb-icon"><svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z"/></svg></span>
+        <span class="hb-text">
+          <span class="hb-title">Nouveau rendez-vous</span>
+          <span class="hb-sub">Planifier une intervention</span>
+        </span>
+        <svg class="hb-chev" viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <button class="home-btn" data-nav="clients">
+        <span class="hb-icon"><svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M12 12a5 5 0 1 0 0-10 5 5 0 0 0 0 10zm0 2c-4.4 0-8 2.2-8 5v3h16v-3c0-2.8-3.6-5-8-5z"/></svg></span>
+        <span class="hb-text">
+          <span class="hb-title">Clients</span>
+          <span class="hb-sub">Rechercher une fiche</span>
+        </span>
+        <svg class="hb-chev" viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </button>
     </div>
   `;
 
-  for (const d of days) {
-    const iso = toISO(d);
-    const isToday = isSameDay(d, today);
-    const dayRdvs = byDate[iso] || [];
-    const matin = dayRdvs.filter((r) => r.periode === "matin");
-    const apresmidi = dayRdvs.filter((r) => r.periode === "apres-midi");
+  root.querySelector('[data-nav="agenda"]').onclick = () => { state.view = "agenda"; render(); };
+  root.querySelector('[data-nav="clients"]').onclick = () => { state.view = "clients"; render(); };
+  root.querySelector('[data-nav="rdv-new"]').onclick = () => openRdvForm();
+}
 
-    html += `<div class="day-card ${isToday ? "is-today" : ""}">
-      <div class="day-head">
-        <span class="dow">${JOURS[(d.getDay() + 6) % 7]}</span>
-        <span class="ddate">${fmtShort(d)}</span>
-        ${isToday ? '<span class="today-pill">Aujourd\'hui</span>' : ""}
-      </div>
-      <div class="periods">
-        ${renderPeriod("matin", "Matin", matin, clientMap, iso)}
-        ${renderPeriod("apres-midi", "Après-midi", apresmidi, clientMap, iso)}
-      </div>
-      ${dayRdvs.length >= 2 ? `<button class="optimize-bar" data-optimize="${iso}">
-        <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M12 2c1 3-1 4-1 6 0 1.2 1 2 2 2 1.3 0 2-1 2-2.2 1.6 1.4 3 3.7 3 6.2a6 6 0 0 1-12 0c0-2.6 1.1-4.3 2.3-6C9.2 6.3 10.5 4.4 12 2Z"/></svg>
-        Optimiser le trajet (${dayRdvs.length} clients)
-      </button>` : ""}
-    </div>`;
+// ---------- Vue Agenda (liste chronologique, sans grille matin/après-midi) ----------
+async function renderAgenda() {
+  const todayISO = toISO(new Date());
+  const all = await DB.listRendezvous();
+  const upcoming = all.filter((r) => r.date >= todayISO);
+
+  const clients = await DB.listClients();
+  const clientMap = Object.fromEntries(clients.map((c) => [c.id, c]));
+
+  const byDate = {};
+  upcoming.forEach((r) => { (byDate[r.date] ||= []).push(r); });
+  const dates = Object.keys(byDate).sort();
+
+  let html = `
+    <h2 class="view-heading">Prochains rendez-vous</h2>
+    <button class="btn-block-primary" id="btn-new-rdv">
+      <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z"/></svg>
+      Nouveau rendez-vous
+    </button>
+  `;
+
+  if (dates.length === 0) {
+    html += `<div class="empty-state"><span class="emoji">📅</span>Aucun rendez-vous à venir.<br>Ajoute-en un avec le bouton ci-dessus.</div>`;
+  } else {
+    for (const date of dates) {
+      const items = byDate[date].slice().sort((a, b) => (a.ordre ?? 0) - (b.ordre ?? 0));
+      html += `<div class="day-group">
+        <div class="day-group-label">${dayLabel(date)}</div>
+        ${items.map((r, idx) => renderRdvCard(r, clientMap, idx === 0, idx === items.length - 1)).join("")}
+      </div>`;
+    }
   }
 
   root.innerHTML = html;
 
-  document.getElementById("week-prev").onclick = () => { state.weekStart = addDays(state.weekStart, -7); render(); };
-  document.getElementById("week-next").onclick = () => { state.weekStart = addDays(state.weekStart, 7); render(); };
-  btnToday.onclick = () => { state.weekStart = startOfWeek(new Date()); render(); };
-
-  root.querySelectorAll(".slot[data-rdv]").forEach((el) => {
+  document.getElementById("btn-new-rdv").onclick = () => openRdvForm();
+  root.querySelectorAll(".rdv-card-body").forEach((el) => {
     el.onclick = () => openRdvDetail(el.dataset.rdv);
   });
-  root.querySelectorAll(".add-slot-btn").forEach((el) => {
-    el.onclick = () => openRdvForm({ date: el.dataset.date, periode: el.dataset.periode });
-  });
-  root.querySelectorAll("[data-optimize]").forEach((el) => {
-    el.onclick = () => toast("Optimisation du trajet : disponible avec le géocodage (prochaine étape) 🧭");
+  root.querySelectorAll("[data-move]").forEach((el) => {
+    el.onclick = (e) => {
+      e.stopPropagation();
+      moveRdv(el.dataset.rdv, el.dataset.move);
+    };
   });
 }
 
-function renderPeriod(key, label, list, clientMap, iso) {
-  let inner = "";
-  if (list.length === 0) {
-    inner = `<div class="slot-empty">—</div>`;
-  } else {
-    inner = list.map((r) => {
-      const c = clientMap[r.clientId];
-      const typeClass = r.type === "entretien" ? "type-entretien" : "type-depannage";
-      return `<button class="slot ${typeClass}" data-rdv="${r.id}">
-        <span class="slot-name">${escapeHtml(c ? `${c.prenom} ${c.nom}` : "Client supprimé")}</span>
-        <span class="slot-type">${r.type === "entretien" ? "Entretien" : "Dépannage"}</span>
-      </button>`;
-    }).join("");
-  }
-  return `<div class="period">
-    <div class="period-label">${label}</div>
-    ${inner}
-    <button class="add-slot-btn" data-date="${iso}" data-periode="${key}">+ Ajouter</button>
+function renderRdvCard(r, clientMap, isFirst, isLast) {
+  const c = clientMap[r.clientId];
+  const name = c ? `${c.prenom} ${c.nom}` : "Client supprimé";
+  const addr = r.adresse || (c && c.adresse) || "";
+  const period = periodLabel(r.periode);
+  const sub = r.commentaire || (r.type === "entretien" ? "Entretien" : "Dépannage");
+  return `<div class="rdv-card">
+    <button class="rdv-card-body" data-rdv="${r.id}">
+      <p class="rdv-title">${period ? `<span class="rdv-period-tag">${period} ·</span>` : ""}${escapeHtml(name)}</p>
+      ${addr ? `<div class="rdv-addr"><svg viewBox="0 0 24 24" width="12" height="12"><path fill="currentColor" d="M12 2a7 7 0 0 0-7 7c0 5.2 7 13 7 13s7-7.8 7-13a7 7 0 0 0-7-7zm0 9.5A2.5 2.5 0 1 1 12 6.5a2.5 2.5 0 0 1 0 5z"/></svg>${escapeHtml(addr)}</div>` : ""}
+      <div class="rdv-sub">${escapeHtml(sub)}</div>
+    </button>
+    <div class="rdv-order-controls">
+      <button data-move="up" data-rdv="${r.id}" ${isFirst ? "disabled" : ""} aria-label="Monter">
+        <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M12 8l-6 6h12z"/></svg>
+      </button>
+      <button data-move="down" data-rdv="${r.id}" ${isLast ? "disabled" : ""} aria-label="Descendre">
+        <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M12 16l6-6H6z"/></svg>
+      </button>
+    </div>
   </div>`;
+}
+
+async function moveRdv(id, direction) {
+  const r = await DB.getRendezvous(id);
+  if (!r) return;
+  const sameDay = (await DB.listRendezvous()).filter((x) => x.date === r.date).sort((a, b) => (a.ordre ?? 0) - (b.ordre ?? 0));
+  const idx = sameDay.findIndex((x) => x.id === id);
+  const swapIdx = direction === "up" ? idx - 1 : idx + 1;
+  if (swapIdx < 0 || swapIdx >= sameDay.length) return;
+  const a = sameDay[idx], b = sameDay[swapIdx];
+  const ordreA = a.ordre ?? 0, ordreB = b.ordre ?? 0;
+  a.ordre = ordreB; b.ordre = ordreA;
+  await DB.saveRendezvous(a);
+  await DB.saveRendezvous(b);
+  render();
 }
 
 // ---------- Vue Clients ----------
 async function renderClients() {
   const clients = await DB.searchClients(state.clientSearch);
-  let html = `<input type="text" class="search-bar" id="client-search" placeholder="Rechercher un client (nom, adresse, téléphone)" value="${escapeHtml(state.clientSearch)}" />`;
+  let html = `<h2 class="view-heading">Clients</h2><input type="text" class="search-bar" id="client-search" placeholder="Rechercher un client (nom, adresse, téléphone)" value="${escapeHtml(state.clientSearch)}" />`;
 
   if (clients.length === 0) {
     html += `<div class="empty-state"><span class="emoji">🔍</span>${state.clientSearch ? "Aucun client trouvé." : "Aucun client pour l'instant.<br>Ajoute ton premier client avec le bouton +."}</div>`;
   } else {
-    html += clients.map((c) => `
-      <button class="client-row" data-client="${c.id}">
-        <span class="client-avatar">${initials(c)}</span>
-        <span>
-          <span class="cname">${escapeHtml(c.prenom)} ${escapeHtml(c.nom)}</span>
-          <span class="caddr">${escapeHtml(c.adresse || "Adresse non renseignée")}</span>
-        </span>
-        <span class="chevron">
-          <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        </span>
-      </button>`).join("");
+    html += clients.map((c) => clientRowHtml(c)).join("");
   }
 
   root.innerHTML = html;
   const input = document.getElementById("client-search");
   input.oninput = () => { state.clientSearch = input.value; renderClientsListOnly(); };
-  input.focus();
   root.querySelectorAll("[data-client]").forEach((el) => {
     el.onclick = () => { state.clientId = el.dataset.client; state.view = "fiche"; render(); };
   });
 }
 
+function clientRowHtml(c) {
+  return `<button class="client-row" data-client="${c.id}">
+    <span class="client-avatar">${initials(c)}</span>
+    <span>
+      <span class="cname">${escapeHtml(c.prenom)} ${escapeHtml(c.nom)}</span>
+      <span class="caddr">${escapeHtml(c.adresse || "Adresse non renseignée")}</span>
+    </span>
+    <span class="chevron">
+      <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </span>
+  </button>`;
+}
+
 async function renderClientsListOnly() {
-  // ré-affiche juste la liste sans perdre le focus de la recherche
   const clients = await DB.searchClients(state.clientSearch);
   const container = document.createElement("div");
   if (clients.length === 0) {
     container.innerHTML = `<div class="empty-state"><span class="emoji">🔍</span>${state.clientSearch ? "Aucun client trouvé." : "Aucun client pour l'instant."}</div>`;
   } else {
-    container.innerHTML = clients.map((c) => `
-      <button class="client-row" data-client="${c.id}">
-        <span class="client-avatar">${initials(c)}</span>
-        <span>
-          <span class="cname">${escapeHtml(c.prenom)} ${escapeHtml(c.nom)}</span>
-          <span class="caddr">${escapeHtml(c.adresse || "Adresse non renseignée")}</span>
-        </span>
-        <span class="chevron">
-          <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        </span>
-      </button>`).join("");
+    container.innerHTML = clients.map((c) => clientRowHtml(c)).join("");
   }
-  const old = root.querySelectorAll(".client-row, .empty-state");
-  old.forEach((n) => n.remove());
+  root.querySelectorAll(".client-row, .empty-state").forEach((n) => n.remove());
   root.append(...container.childNodes);
   root.querySelectorAll("[data-client]").forEach((el) => {
     el.onclick = () => { state.clientId = el.dataset.client; state.view = "fiche"; render(); };
@@ -208,7 +229,6 @@ function initials(c) {
 async function renderFiche() {
   const c = await DB.getClient(state.clientId);
   if (!c) { state.view = "clients"; return render(); }
-  title.textContent = `${c.prenom} ${c.nom}`;
 
   const historique = await DB.listInterventionsForClient(c.id);
   const mapsUrl = c.adresse ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(c.adresse)}` : null;
@@ -315,6 +335,7 @@ function labelMateriel(v) {
 async function renderReglages() {
   const depart = (await DB.getParam("pointDepart", "")) || "";
   root.innerHTML = `
+    <h2 class="view-heading">Réglages</h2>
     <div class="info-block">
       <h3>Point de départ</h3>
       <div class="form-row" style="margin-bottom:8px;">
@@ -510,7 +531,7 @@ async function openRdvForm(prefill = {}, existing) {
   const r = existing || {};
   const clientId = r.clientId || prefill.clientId || clients[0].id;
   const date = r.date || prefill.date || toISO(new Date());
-  const periode = r.periode || prefill.periode || "matin";
+  const periode = r.periode ?? "";
   const type = r.type || "entretien";
 
   openSheet(`
@@ -523,8 +544,9 @@ async function openRdvForm(prefill = {}, existing) {
     </div>
     <div class="form-row"><label>Date</label><input type="date" id="f-date" value="${date}" /></div>
     <div class="form-row">
-      <label>Période</label>
-      <div class="pill-choice" id="f-periode">
+      <label>Moment souhaité par le client (facultatif)</label>
+      <div class="pill-choice pill-3" id="f-periode">
+        <button type="button" data-val="" class="${periode === "" ? "active period-active" : ""}">Non précisé</button>
         <button type="button" data-val="matin" class="${periode === "matin" ? "active period-active" : ""}">Matin</button>
         <button type="button" data-val="apres-midi" class="${periode === "apres-midi" ? "active period-active" : ""}">Après-midi</button>
       </div>
@@ -567,10 +589,12 @@ async function openRdvForm(prefill = {}, existing) {
       type: selType,
       adresse: client.adresse,
       commentaire: document.getElementById("f-comment").value.trim(),
+      ordre: r.ordre ?? Date.now(),
     };
     await DB.saveRendezvous(item);
     closeSheet();
     toast(existing ? "Rendez-vous mis à jour" : "Rendez-vous créé");
+    state.view = "agenda";
     render();
   };
   if (existing) {
@@ -596,7 +620,7 @@ async function openInterventionClientPicker() {
   openSheet(`
     <h2>Pour quel client ?</h2>
     <div class="form-row">
-      <select id="f-client-pick" style="width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:10px;font-size:15px;">
+      <select id="f-client-pick" style="width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:10px;font-size:15px;background:var(--surface);color:var(--ink);">
         ${clients.map((c) => `<option value="${c.id}">${escapeHtml(c.prenom)} ${escapeHtml(c.nom)}</option>`).join("")}
       </select>
     </div>
@@ -685,7 +709,9 @@ function escapeAttr(str) { return escapeHtml(str); }
 // ---------- Service worker (offline) ----------
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
-    navigator.serviceWorker.register("sw.js").catch(() => {});
+    navigator.serviceWorker.register("sw.js").then((reg) => {
+      reg.update();
+    }).catch(() => {});
   });
 }
 

@@ -2,7 +2,7 @@
    Vues : Accueil / Agenda / Clients / Fiche client / Paramètres
    Toute la donnée passe par DB (db.js → IndexedDB). */
 
-const APP_VERSION = "1.2.2"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
+const APP_VERSION = "1.2.3"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
 
 const JOURS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
 const JOURS_COURT = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
@@ -895,11 +895,20 @@ async function confirmDeleteClient(c) {
 
 // ---------- Rendez-vous proches ----------
 async function renderNearbyHtml(clientId, dateISO, excludeRdvId) {
-  if (!clientId || !dateISO) return "";
+  const wrap = (inner) => `
+    <div class="info-block" style="margin-top:2px;">
+      <h3>Rendez-vous proches (fiche client)</h3>
+      ${inner}
+    </div>
+  `;
+
+  if (!clientId) {
+    return wrap('<p class="near-hint">Sélectionne ou crée un client pour voir automatiquement les rendez-vous déjà pris à proximité.</p>');
+  }
   const client = await DB.getClient(clientId);
-  if (!client) return "";
+  if (!client) return wrap('<p class="near-hint">Sélectionne ou crée un client pour voir automatiquement les rendez-vous déjà pris à proximité.</p>');
   if (client.lat == null) {
-    return `<p class="near-hint">📍 Ce client n'est pas encore géocodé — les rendez-vous proches ne peuvent pas être calculés.</p>`;
+    return wrap('<p class="near-hint">📍 Ce client n\'est pas encore géocodé — les rendez-vous proches ne peuvent pas être calculés (réessaie depuis sa fiche une fois en ligne).</p>');
   }
   const start = new Date(dateISO);
   const end = new Date(dateISO);
@@ -921,16 +930,15 @@ async function renderNearbyHtml(clientId, dateISO, excludeRdvId) {
     .sort((a, b) => a.distKm - b.distKm)
     .slice(0, 5);
 
-  if (withDist.length === 0) return "";
-  return `
-    <div class="info-block" style="margin-top:2px;">
-      <h3>Rendez-vous proches (90 prochains jours)</h3>
-      <p class="near-hint" style="margin:0 0 6px;">Touche une date pour la reprendre pour ce rendez-vous.</p>
-      <div class="near-list">
-        ${withDist.map((x) => `<button type="button" class="near-item near-item-btn" data-copy-date="${x.date}"><span>${fmtDateFR(x.date)} — ${escapeHtml(x.name)}</span><span class="dist">${x.distKm.toFixed(1)} km</span></button>`).join("")}
-      </div>
+  if (withDist.length === 0) {
+    return wrap('<p class="near-hint">Aucun rendez-vous trouvé à moins de 15 km dans les 90 prochains jours.</p>');
+  }
+  return wrap(`
+    <p class="near-hint" style="margin:0 0 6px;">Dans un rayon de 15 km, sur les 90 prochains jours. Touche une date pour la reprendre pour ce rendez-vous.</p>
+    <div class="near-list">
+      ${withDist.map((x) => `<button type="button" class="near-item near-item-btn" data-copy-date="${x.date}"><span>${fmtDateFR(x.date)} — ${escapeHtml(x.name)}</span><span class="dist">${x.distKm.toFixed(1)} km</span></button>`).join("")}
     </div>
-  `;
+  `);
 }
 
 async function computeNearbyByPosition(coords, horizonDays) {

@@ -266,6 +266,16 @@ button { font-family: inherit; }
   font-size: 19px;
   margin-top: 1px;
 }
+.cal-chip {
+  background: var(--surface-2);
+  border: 1px dashed var(--line);
+  color: var(--ink-dim);
+  font-size: 10.5px;
+  line-height: 1.3;
+  padding: 6px 7px;
+  border-radius: 8px;
+  margin-bottom: 6px;
+}
 .day-col-optimize {
   display: flex;
   align-items: center;

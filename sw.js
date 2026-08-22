@@ -1,4 +1,4 @@
-const CACHE_NAME = "tournees-poeles-v1.9.0";
+const CACHE_NAME = "tournees-poeles-v1.10.0";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -6,6 +6,7 @@ const APP_SHELL = [
   "./db.js",
   "./geo.js",
   "./drive.js",
+  "./calendar.js",
   "./app.js",
   "./manifest.json",
   "./icons/icon-192.png",

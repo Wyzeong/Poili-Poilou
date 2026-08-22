@@ -2,7 +2,7 @@
    Vues : Accueil / Agenda / Clients / Fiche client / Paramètres
    Toute la donnée passe par DB (db.js → IndexedDB). */
 
-const APP_VERSION = "1.9.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
+const APP_VERSION = "1.10.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
 
 const JOURS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
 const JOURS_COURT = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
@@ -342,12 +342,14 @@ async function refreshAgendaBody() {
     const isToday = isSameDay(d, today);
     const items = (byDate[iso] || []).slice().sort((a, b) => (a.ordre ?? 0) - (b.ordre ?? 0));
     const pendingCount = items.filter((r) => r.statut !== "honore").length;
+    const calEvents = await getCalendarEventsForDate(iso);
 
     html += `<div class="day-col ${isToday ? "is-today" : ""}">
       <div class="day-col-head">
         <div class="dow">${JOURS_COURT[(d.getDay() + 6) % 7]}</div>
         <div class="dnum">${d.getDate()}</div>
       </div>
+      ${calEvents.map((ev) => `<div class="cal-chip">📅 ${ev.time ? escapeHtml(ev.time) + " · " : ""}${escapeHtml(ev.title)}</div>`).join("")}
       ${pendingCount >= 2 ? `<button class="day-col-optimize" data-optimize="${iso}">
         <svg viewBox="0 0 24 24" width="13" height="13"><path fill="currentColor" d="M12 2c1 3-1 4-1 6 0 1.2 1 2 2 2 1.3 0 2-1 2-2.2 1.6 1.4 3 3.7 3 6.2a6 6 0 0 1-12 0c0-2.6 1.1-4.3 2.3-6C9.2 6.3 10.5 4.4 12 2Z"/></svg>
         Optimiser
@@ -779,6 +781,11 @@ async function renderReglages() {
       <h3>Sauvegarde (Google Drive)</h3>
       <div id="drive-status"></div>
     </div>
+
+    <div class="info-block">
+      <h3>Google Agenda (lecture seule)</h3>
+      <div id="calendar-status"></div>
+    </div>
   `;
 
   document.querySelectorAll("#f-retour button").forEach((b) => {
@@ -810,6 +817,7 @@ async function renderReglages() {
   };
 
   await renderDriveStatus();
+  await renderCalendarStatus();
 }
 
 async function buildBackupPayload() {
@@ -872,6 +880,95 @@ async function maybeAutoCloudBackup() {
   if (last && Date.now() - new Date(last).getTime() < CLOUD_BACKUP_INTERVAL_MS) return;
   await runCloudBackup();
   if (state.view === "reglages") renderDriveStatus();
+}
+
+// ---------- Google Agenda (lecture seule) ----------
+const CALENDAR_SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const CALENDAR_SYNC_HORIZON_DAYS = 90;
+
+async function runCalendarSync() {
+  try {
+    const now = new Date();
+    const future = addDays(now, CALENDAR_SYNC_HORIZON_DAYS);
+    const events = await calendarFetchEvents(now.toISOString(), future.toISOString());
+    const byDate = {};
+    events.forEach((e) => { (byDate[e.date] ||= []).push({ time: e.time, title: e.title }); });
+    await DB.setParam("calendarEventsCache", byDate);
+    await DB.setParam("lastCalendarSyncAt", new Date().toISOString());
+    await DB.setParam("lastCalendarError", null);
+    return { ok: true };
+  } catch (e) {
+    const msg = /interaction_required|access_denied|invalid_grant/.test(e.message)
+      ? "Reconnexion nécessaire (accès expiré ou révoqué)"
+      : (!navigator.onLine ? "Pas de connexion Internet" : e.message);
+    await DB.setParam("lastCalendarError", { message: msg, at: new Date().toISOString() });
+    return { ok: false, error: msg };
+  }
+}
+
+async function maybeAutoCalendarSync() {
+  const connected = await DB.getParam("calendarConnected", false);
+  if (!connected) return;
+  const last = await DB.getParam("lastCalendarSyncAt", null);
+  if (last && Date.now() - new Date(last).getTime() < CALENDAR_SYNC_INTERVAL_MS) return;
+  await runCalendarSync();
+  if (state.view === "reglages") renderCalendarStatus();
+}
+
+async function getCalendarEventsForDate(dateISO) {
+  const cache = await DB.getParam("calendarEventsCache", {});
+  return cache[dateISO] || [];
+}
+
+async function renderCalendarStatus() {
+  const el = document.getElementById("calendar-status");
+  if (!el) return;
+  const connected = await DB.getParam("calendarConnected", false);
+  const lastSync = await DB.getParam("lastCalendarSyncAt", null);
+  const lastError = await DB.getParam("lastCalendarError", null);
+
+  if (!connected) {
+    el.innerHTML = `
+      <p style="font-size:13.5px;color:var(--smoke);margin:0 0 12px;">Connecte le Google Agenda personnel de ton père (RDV médicaux, etc.) pour voir ses engagements directement dans l'agenda de l'appli et éviter les doubles réservations. Rien n'est jamais modifié sur son agenda — uniquement de la lecture.</p>
+      <button class="btn-primary" id="cal-connect-btn" style="width:100%;">Connecter Google Agenda</button>
+    `;
+    document.getElementById("cal-connect-btn").onclick = async () => {
+      try {
+        toast("Connexion à Google…");
+        await calendarConnect();
+        await DB.setParam("calendarConnected", true);
+        toast("Connecté ✓ — synchronisation en cours…");
+        const r = await runCalendarSync();
+        toast(r.ok ? "Synchronisation réussie ✓" : "Échec : " + r.error);
+        renderCalendarStatus();
+      } catch (e) {
+        toast("Connexion impossible : " + e.message);
+      }
+    };
+    return;
+  }
+
+  el.innerHTML = `
+    <p class="geo-status geo-ok" style="margin:0 0 4px;">✓ Connecté à Google Agenda</p>
+    <div class="info-row"><span class="k">Dernière synchronisation</span><span class="v">${lastSync ? fmtDateTimeFR(lastSync) : "Jamais"}</span></div>
+    ${lastError ? `<p class="geo-status geo-pending" style="margin:6px 0 0;">⚠️ Dernier échec : ${escapeHtml(lastError.message)} (${fmtDateTimeFR(lastError.at)})</p>` : ""}
+    <div class="sheet-actions" style="margin-top:10px;">
+      <button class="btn-secondary" id="cal-sync-btn">Synchroniser maintenant</button>
+    </div>
+    <button class="btn-danger" id="cal-disconnect-btn" style="width:100%;margin-top:10px;">Déconnecter</button>
+  `;
+  document.getElementById("cal-sync-btn").onclick = async () => {
+    toast("Synchronisation en cours…");
+    const r = await runCalendarSync();
+    toast(r.ok ? "Synchronisation réussie ✓" : "Échec : " + r.error);
+    renderCalendarStatus();
+  };
+  document.getElementById("cal-disconnect-btn").onclick = async () => {
+    calendarDisconnect();
+    await DB.setParam("calendarConnected", false);
+    toast("Déconnecté de Google Agenda");
+    renderCalendarStatus();
+  };
 }
 
 async function renderDriveStatus() {
@@ -1228,6 +1325,7 @@ async function openRdvForm(prefill = {}, existing) {
       </button>
     </div>
     <div class="form-row"><label>Date</label><input type="date" id="f-date" value="${date}" /></div>
+    <div id="calendar-warning"></div>
     <div class="form-row">
       <label>Moment souhaité par le client (facultatif)</label>
       <div class="pill-choice pill-3" id="f-periode">
@@ -1324,8 +1422,18 @@ async function openRdvForm(prefill = {}, existing) {
       };
     });
   }
-  document.getElementById("f-date").onchange = refreshNearby;
+  async function refreshCalendarWarning() {
+    const el = document.getElementById("calendar-warning");
+    if (!el) return;
+    const dateVal = document.getElementById("f-date").value;
+    const events = await getCalendarEventsForDate(dateVal);
+    el.innerHTML = events.length
+      ? `<p class="geo-status geo-pending" style="margin:4px 0 8px;">⚠️ Google Agenda ce jour-là : ${events.map((e) => `${e.time ? escapeHtml(e.time) + " " : ""}${escapeHtml(e.title)}`).join(", ")}</p>`
+      : "";
+  }
+  document.getElementById("f-date").onchange = () => { refreshNearby(); refreshCalendarWarning(); };
   refreshNearby();
+  refreshCalendarWarning();
 
   let sectorCoords = null;
   const sectorInput = document.getElementById("f-sector-input");
@@ -1606,4 +1714,5 @@ if ("serviceWorker" in navigator) {
 history.replaceState(historySnapshot(), "", "#accueil");
 render();
 maybeAutoCloudBackup();
+maybeAutoCalendarSync();
 maybeFridayReminder();

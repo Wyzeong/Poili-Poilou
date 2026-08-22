@@ -2,7 +2,7 @@
    Vues : Accueil / Agenda / Clients / Fiche client / Paramètres
    Toute la donnée passe par DB (db.js → IndexedDB). */
 
-const APP_VERSION = "1.5.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
+const APP_VERSION = "1.7.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
 
 const JOURS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
 const JOURS_COURT = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
@@ -608,7 +608,6 @@ function labelMateriel(v) {
 async function renderReglages() {
   const retourDepart = await DB.getParam("retourDepart", false);
   const clientsSansGeo = (await DB.listClients()).filter((c) => c.adresse && c.lat == null).length;
-  const lastExportAt = await DB.getParam("lastExportAt", null);
 
   root.innerHTML = `
     <h2 class="view-heading">Paramètres</h2>
@@ -616,7 +615,6 @@ async function renderReglages() {
     <div class="info-block">
       <h3>À propos</h3>
       <div class="info-row"><span class="k">Version de l'application</span><span class="v">${APP_VERSION}</span></div>
-      <div class="info-row"><span class="k">Dernier export</span><span class="v">${lastExportAt ? fmtDateTimeFR(lastExportAt) : "Jamais"}</span></div>
     </div>
 
     <div class="info-block">
@@ -640,18 +638,8 @@ async function renderReglages() {
     </div>
 
     <div class="info-block">
-      <h3>Sauvegarde cloud (Google Drive)</h3>
+      <h3>Sauvegarde (Google Drive)</h3>
       <div id="drive-status"></div>
-    </div>
-
-    <div class="info-block">
-      <h3>Sauvegarde locale</h3>
-      <p style="font-size:13.5px;color:var(--smoke);margin:0 0 12px;">Exporte toutes les données (clients, rendez-vous, interventions) dans un fichier que tu peux garder de côté, en plus de la sauvegarde cloud ci-dessus.</p>
-      <div class="sheet-actions" style="margin-top:0;">
-        <button class="btn-secondary" id="export-btn">Exporter maintenant</button>
-        <button class="btn-secondary" id="import-btn">Importer</button>
-      </div>
-      <input type="file" id="import-file" accept="application/json" hidden />
     </div>
   `;
 
@@ -684,29 +672,6 @@ async function renderReglages() {
   };
 
   await renderDriveStatus();
-
-  document.getElementById("export-btn").onclick = async () => {
-    await runExport();
-    if (state.view === "reglages") render();
-  };
-
-  const fileInput = document.getElementById("import-file");
-  document.getElementById("import-btn").onclick = () => fileInput.click();
-  fileInput.onchange = async () => {
-    const file = fileInput.files[0];
-    if (!file) return;
-    try {
-      const text = await file.text();
-      const data = JSON.parse(text);
-      for (const c of data.clients || []) await DB.saveClient(c);
-      for (const r of data.rendezvous || []) await DB.saveRendezvous(r);
-      for (const i of data.interventions || []) await DB.saveIntervention(i);
-      toast("Import terminé ✓");
-      render();
-    } catch (e) {
-      toast("Fichier invalide");
-    }
-  };
 }
 
 async function buildBackupPayload() {
@@ -718,19 +683,6 @@ async function buildBackupPayload() {
   };
 }
 
-async function runExport() {
-  const data = await buildBackupPayload();
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `tournees-poeles-${toISO(new Date())}.json`;
-  a.click();
-  URL.revokeObjectURL(url);
-  await DB.setParam("lastExportAt", new Date().toISOString());
-  toast("Export terminé ✓");
-}
-
 // ---------- Sauvegarde cloud (Google Drive) ----------
 const CLOUD_BACKUP_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
@@ -740,6 +692,7 @@ async function runCloudBackup() {
     await driveUploadBackup(JSON.stringify(data, null, 2));
     await DB.setParam("lastCloudBackupAt", new Date().toISOString());
     await DB.setParam("lastCloudError", null);
+    driveCleanupOldBackups().catch(() => {}); // best-effort, ne doit jamais faire échouer la sauvegarde
     return { ok: true };
   } catch (e) {
     const msg = /interaction_required|access_denied|invalid_grant/.test(e.message)
@@ -748,6 +701,30 @@ async function runCloudBackup() {
     await DB.setParam("lastCloudError", { message: msg, at: new Date().toISOString() });
     return { ok: false, error: msg };
   }
+}
+
+async function runCloudImport(fileId) {
+  try {
+    const text = await driveDownloadBackupById(fileId);
+    const data = JSON.parse(text);
+    for (const c of data.clients || []) await DB.saveClient(c);
+    for (const r of data.rendezvous || []) await DB.saveRendezvous(r);
+    for (const i of data.interventions || []) await DB.saveIntervention(i);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+function fmtDriveBackupLabel(f) {
+  // Le nom du fichier contient déjà la date/heure (ex: ...-2026-08-22_18h42.json) —
+  // on s'en sert directement plutôt que de refaire confiance à createdTime (fuseau Drive).
+  const m = f.name.match(/(\d{4})-(\d{2})-(\d{2})_(\d{2})h(\d{2})/);
+  if (m) {
+    const [, y, mo, d, h, mi] = m;
+    return `${d} ${MOIS_COURT[parseInt(mo, 10) - 1]} ${y} à ${h}h${mi}`;
+  }
+  return f.createdTime ? fmtDateTimeFR(f.createdTime) : f.name;
 }
 
 async function maybeAutoCloudBackup() {
@@ -789,12 +766,13 @@ async function renderDriveStatus() {
 
   el.innerHTML = `
     <p class="geo-status geo-ok" style="margin:0 0 4px;">✓ Connecté à Google Drive</p>
-    <div class="info-row"><span class="k">Dernière sauvegarde cloud</span><span class="v">${lastBackup ? fmtDateTimeFR(lastBackup) : "Jamais"}</span></div>
+    <div class="info-row"><span class="k">Dernière sauvegarde</span><span class="v">${lastBackup ? fmtDateTimeFR(lastBackup) : "Jamais"}</span></div>
     ${lastError ? `<p class="geo-status geo-pending" style="margin:6px 0 0;">⚠️ Dernier échec : ${escapeHtml(lastError.message)} (${fmtDateTimeFR(lastError.at)})</p>` : ""}
     <div class="sheet-actions" style="margin-top:10px;">
-      <button class="btn-secondary" id="drive-backup-btn">Sauvegarder maintenant</button>
-      <button class="btn-danger" id="drive-disconnect-btn">Déconnecter</button>
+      <button class="btn-secondary" id="drive-backup-btn">Exporter vers Drive</button>
+      <button class="btn-secondary" id="drive-import-btn">Importer depuis Drive</button>
     </div>
+    <button class="btn-danger" id="drive-disconnect-btn" style="width:100%;margin-top:10px;">Déconnecter</button>
   `;
   document.getElementById("drive-backup-btn").onclick = async () => {
     toast("Sauvegarde en cours…");
@@ -802,11 +780,67 @@ async function renderDriveStatus() {
     toast(r.ok ? "Sauvegarde Drive réussie ✓" : "Échec de la sauvegarde : " + r.error);
     renderDriveStatus();
   };
+  document.getElementById("drive-import-btn").onclick = () => openBackupPicker();
   document.getElementById("drive-disconnect-btn").onclick = async () => {
     driveDisconnect();
     await DB.setParam("driveConnected", false);
     toast("Déconnecté de Google Drive");
     renderDriveStatus();
+  };
+}
+
+async function openBackupPicker() {
+  openSheet(`<h2>Choisir une sauvegarde</h2><p class="near-hint">Chargement des sauvegardes disponibles…</p>`);
+  let files;
+  try {
+    files = await driveListBackups();
+  } catch (e) {
+    openSheet(`
+      <h2>Erreur</h2>
+      <p style="color:var(--smoke);font-size:14px;">${escapeHtml(e.message)}</p>
+      <div class="sheet-actions"><button class="btn-primary" id="ok-btn" style="width:100%;">OK</button></div>
+    `);
+    document.getElementById("ok-btn").onclick = closeSheet;
+    return;
+  }
+  if (files.length === 0) {
+    openSheet(`
+      <h2>Aucune sauvegarde trouvée</h2>
+      <p style="color:var(--smoke);font-size:14px;">Aucune sauvegarde n'existe encore sur ce compte Drive.</p>
+      <div class="sheet-actions"><button class="btn-primary" id="ok-btn" style="width:100%;">OK</button></div>
+    `);
+    document.getElementById("ok-btn").onclick = closeSheet;
+    return;
+  }
+  openSheet(`
+    <h2>Choisir une sauvegarde</h2>
+    <p class="near-hint" style="margin:0 0 8px;">Sélectionne la date à restaurer.</p>
+    <div class="near-list">
+      ${files.map((f) => `<button type="button" class="near-item near-item-btn" data-file-id="${f.id}"><span>${fmtDriveBackupLabel(f)}</span></button>`).join("")}
+    </div>
+  `);
+  document.querySelectorAll("[data-file-id]").forEach((el) => {
+    el.onclick = () => confirmCloudImport(el.dataset.fileId, el.textContent.trim());
+  });
+}
+
+async function confirmCloudImport(fileId, label) {
+  openSheet(`
+    <h2>Importer cette sauvegarde ?</h2>
+    <p style="color:var(--smoke);font-size:14px;margin:-6px 0 4px;">${escapeHtml(label || "")}</p>
+    <p style="color:var(--smoke);font-size:14px;">Cela va ajouter ou mettre à jour tes clients, rendez-vous et interventions locaux avec le contenu de cette sauvegarde. Rien ne sera supprimé localement.</p>
+    <div class="sheet-actions">
+      <button class="btn-secondary" id="cancel-btn">Annuler</button>
+      <button class="btn-primary" id="confirm-btn">Importer</button>
+    </div>
+  `);
+  document.getElementById("cancel-btn").onclick = closeSheet;
+  document.getElementById("confirm-btn").onclick = async () => {
+    closeSheet();
+    toast("Import en cours…");
+    const r = await runCloudImport(fileId);
+    toast(r.ok ? "Import terminé ✓" : "Échec de l'import : " + r.error);
+    render();
   };
 }
 

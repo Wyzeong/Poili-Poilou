@@ -5,7 +5,8 @@
 
 const GOOGLE_CLIENT_ID = "972049745058-g02ar6p9se61funaqlafsl10sm5bgg48.apps.googleusercontent.com";
 const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file";
-const DRIVE_BACKUP_FILENAME = "thi-gestion-rdv-sauvegarde.json";
+const DRIVE_BACKUP_PREFIX = "thi-gestion-rdv-sauvegarde";
+const DRIVE_BACKUP_MAX_AGE_DAYS = 30;
 
 let driveTokenClient = null;
 let driveAccessToken = null;
@@ -56,33 +57,66 @@ function driveDisconnect() {
   driveTokenExpiresAt = 0;
 }
 
+function driveBackupFilename(date = new Date()) {
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${DRIVE_BACKUP_PREFIX}-${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}_${pad(date.getHours())}h${pad(date.getMinutes())}.json`;
+}
+
+// Crée toujours un NOUVEAU fichier daté (jamais d'écrasement), pour permettre de choisir
+// parmi plusieurs sauvegardes à l'import.
 async function driveUploadBackup(jsonString) {
   const token = await driveGetToken();
-  const fileId = await DB.getParam("driveBackupFileId", null);
-  const metadata = { name: DRIVE_BACKUP_FILENAME, mimeType: "application/json" };
+  const metadata = { name: driveBackupFilename(), mimeType: "application/json" };
   const boundary = "thi-backup-boundary";
   const body =
     `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n` +
     `--${boundary}\r\nContent-Type: application/json\r\n\r\n${jsonString}\r\n--${boundary}--`;
 
-  const url = fileId
-    ? `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=multipart`
-    : `https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart`;
-
-  const res = await fetch(url, {
-    method: fileId ? "PATCH" : "POST",
+  const res = await fetch(`https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart`, {
+    method: "POST",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": `multipart/related; boundary=${boundary}` },
     body,
   });
   if (!res.ok) {
-    if (res.status === 404 && fileId) {
-      // Le fichier a été supprimé côté Drive : on oublie l'ID et on réessaiera une création propre la prochaine fois.
-      await DB.setParam("driveBackupFileId", null);
-    }
     const text = await res.text().catch(() => "");
     throw new Error(`Erreur Drive (${res.status}) ${text.slice(0, 150)}`);
   }
+  return res.json();
+}
+
+// Liste toutes les sauvegardes disponibles sur le Drive connecté, les plus récentes d'abord.
+async function driveListBackups() {
+  const token = await driveGetToken();
+  const q = encodeURIComponent(`name contains '${DRIVE_BACKUP_PREFIX}' and trashed=false`);
+  const res = await fetch(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name,createdTime)&orderBy=name desc&pageSize=100`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(`Erreur Drive (${res.status})`);
   const data = await res.json();
-  if (!fileId && data.id) await DB.setParam("driveBackupFileId", data.id);
-  return data;
+  return data.files || [];
+}
+
+async function driveDownloadBackupById(fileId) {
+  const token = await driveGetToken();
+  const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(`Erreur Drive (${res.status})`);
+  return res.text();
+}
+
+// Supprime les sauvegardes de plus de 30 jours. Appelée après chaque export réussi.
+// Une éventuelle erreur ici n'invalide jamais la sauvegarde qui vient d'être faite.
+async function driveCleanupOldBackups(maxAgeDays = DRIVE_BACKUP_MAX_AGE_DAYS) {
+  const token = await driveGetToken();
+  const files = await driveListBackups();
+  const cutoff = Date.now() - maxAgeDays * 24 * 60 * 60 * 1000;
+  const toDelete = files.filter((f) => new Date(f.createdTime).getTime() < cutoff);
+  for (const f of toDelete) {
+    await fetch(`https://www.googleapis.com/drive/v3/files/${f.id}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${token}` },
+    }).catch(() => {});
+  }
+  return toDelete.length;
 }

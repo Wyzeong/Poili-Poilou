@@ -2,7 +2,7 @@
    Vues : Accueil / Agenda / Clients / Fiche client / Paramètres
    Toute la donnée passe par DB (db.js → IndexedDB). */
 
-const APP_VERSION = "1.7.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
+const APP_VERSION = "1.8.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
 
 const JOURS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
 const JOURS_COURT = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
@@ -50,6 +50,27 @@ function fmtDateTimeFR(iso) {
   return `${d.toLocaleDateString("fr-FR")} à ${d.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}`;
 }
 function periodLabel(p) { return p === "matin" ? "Matin" : p === "apres-midi" ? "Après-midi" : ""; }
+function clientFullName(c) {
+  if (!c) return "";
+  return c.prenom ? `${c.prenom} ${c.nom}` : c.nom;
+}
+function clientInitials(c) {
+  if (!c) return "?";
+  const a = (c.prenom || c.nom || "?")[0] || "?";
+  const b = c.prenom ? (c.nom || "?")[0] : (c.nom || "??")[1] || "?";
+  return (a + b).toUpperCase();
+}
+function civilLabel(c) {
+  if (!c) return "";
+  if (c.civilite === "femme") return "Madame";
+  if (c.civilite === "homme") return "Monsieur";
+  return "";
+}
+function fmtDateFullFR(iso) {
+  const [y, m, d] = iso.split("-").map(Number);
+  const date = new Date(y, m - 1, d);
+  return `${JOURS[(date.getDay() + 6) % 7]} ${d} ${MOIS[m - 1]} ${y}`;
+}
 
 // ---------- Rendu racine ----------
 const root = document.getElementById("view-root");
@@ -279,7 +300,7 @@ async function refreshAgendaBody() {
 
 function renderRdvChip(r, clientMap) {
   const c = clientMap[r.clientId];
-  const name = c ? `${c.prenom} ${c.nom}` : "Client supprimé";
+  const name = c ? clientFullName(c) : "Client supprimé";
   const addr = c ? c.adresse : (r.adresse || "");
   const honore = r.statut === "honore";
   const typeClass = honore ? "is-honore" : (r.type === "entretien" ? "type-entretien" : "type-depannage");
@@ -300,7 +321,7 @@ async function renderAgendaSearchHtml(query) {
 
   const matches = all
     .map((r) => ({ r, c: cmap[r.clientId] }))
-    .filter((x) => x.c && `${x.c.prenom} ${x.c.nom}`.toLowerCase().includes(q))
+    .filter((x) => x.c && clientFullName(x.c).toLowerCase().includes(q))
     .sort((a, b) => a.r.date.localeCompare(b.r.date));
 
   if (matches.length === 0) {
@@ -309,7 +330,7 @@ async function renderAgendaSearchHtml(query) {
   return matches.map(({ r, c }) => `
     <button class="near-item-block" data-goto-date="${r.date}">
       <span class="nib-date">${fmtDateFR(r.date)}</span>
-      <span class="nib-name">${escapeHtml(c.prenom)} ${escapeHtml(c.nom)}</span>
+      <span class="nib-name">${escapeHtml(clientFullName(c))}</span>
       <span class="nib-addr">📍 ${escapeHtml(c.adresse || "")}</span>
     </button>
   `).join("");
@@ -379,7 +400,7 @@ async function runOptimize(dateISO, depart) {
   let missing = 0;
   for (const r of rdvs) {
     const c = cmap[r.clientId];
-    if (c && c.lat != null) points.push({ id: r.id, lat: c.lat, lon: c.lon, name: `${c.prenom} ${c.nom}` });
+    if (c && c.lat != null) points.push({ id: r.id, lat: c.lat, lon: c.lon, name: clientFullName(c) });
     else missing++;
   }
   if (points.length < 2) {
@@ -438,7 +459,7 @@ function clientRowHtml(c) {
   return `<button class="client-row" data-client="${c.id}">
     <span class="client-avatar">${initials(c)}</span>
     <span>
-      <span class="cname">${escapeHtml(c.prenom)} ${escapeHtml(c.nom)} ${c.lat != null ? '<span class="geo-dot" title="Adresse géocodée"></span>' : ""}</span>
+      <span class="cname">${escapeHtml(clientFullName(c))} ${c.lat != null ? '<span class="geo-dot" title="Adresse géocodée"></span>' : ""}</span>
       <span class="caddr">${escapeHtml(c.adresse || "Adresse non renseignée")}</span>
     </span>
     <span class="chevron">
@@ -462,9 +483,7 @@ async function renderClientsListOnly() {
   });
 }
 
-function initials(c) {
-  return ((c.prenom || "?")[0] + (c.nom || "?")[0]).toUpperCase();
-}
+function initials(c) { return clientInitials(c); }
 
 // ---------- Fiche client ----------
 async function renderFiche() {
@@ -477,12 +496,12 @@ async function renderFiche() {
 
   const wazeUrl = c.adresse ? `https://waze.com/ul?q=${encodeURIComponent(c.adresse)}&navigate=yes` : null;
   const telHref = c.telephone ? `tel:${c.telephone.replace(/\s+/g, "")}` : null;
-  const smsBody = encodeURIComponent(`Bonjour ${c.prenom}, je suis en route pour notre rendez-vous. À tout de suite.`);
+  const smsBody = encodeURIComponent(`Bonjour ${civilLabel(c) ? civilLabel(c) + " " : ""}${c.nom}, je suis en route pour notre rendez-vous. À tout de suite.`);
   const smsHref = c.telephone ? `sms:${c.telephone.replace(/\s+/g, "")}?body=${smsBody}` : null;
 
   root.innerHTML = `
     <div class="fiche-head">
-      <p class="fname">${escapeHtml(c.prenom)} ${escapeHtml(c.nom)}</p>
+      <p class="fname">${escapeHtml(clientFullName(c))}</p>
       <p class="faddr">${escapeHtml(c.adresse || "Adresse non renseignée")}</p>
       ${c.adresse ? (c.lat != null
         ? `<p class="geo-status geo-ok">📍 Adresse localisée <a href="https://www.openstreetmap.org/?mlat=${c.lat}&mlon=${c.lon}&zoom=17" target="_blank" rel="noopener" class="link-btn" style="text-decoration:underline;">Voir sur la carte</a></p>`
@@ -892,8 +911,16 @@ async function openClientForm(existing, onSaved) {
   openSheet(`
     <h2>${existing ? "Modifier le client" : "Nouveau client"}</h2>
     <div class="form-row-2">
-      <div class="form-row"><label>Prénom</label><input type="text" id="f-prenom" value="${escapeAttr(c.prenom)}" /></div>
       <div class="form-row"><label>Nom</label><input type="text" id="f-nom" value="${escapeAttr(c.nom)}" /></div>
+      <div class="form-row"><label>Prénom (facultatif)</label><input type="text" id="f-prenom" value="${escapeAttr(c.prenom)}" /></div>
+    </div>
+    <div class="form-row">
+      <label>Civilité</label>
+      <div class="pill-choice" id="f-civilite">
+        <button type="button" data-val="" class="${!c.civilite ? "active period-active" : ""}">Non précisé</button>
+        <button type="button" data-val="homme" class="${c.civilite === "homme" ? "active period-active" : ""}">Homme</button>
+        <button type="button" data-val="femme" class="${c.civilite === "femme" ? "active period-active" : ""}">Femme</button>
+      </div>
     </div>
     <div class="form-row"><label>Téléphone</label><input type="tel" id="f-tel" value="${escapeAttr(c.telephone)}" /></div>
     <div class="form-row"><label>E-mail (facultatif)</label><input type="email" id="f-email" value="${escapeAttr(c.email)}" /></div>
@@ -919,13 +946,22 @@ async function openClientForm(existing, onSaved) {
   `);
 
   document.getElementById("cancel-btn").onclick = closeSheet;
+  let selCivilite = c.civilite || "";
+  document.querySelectorAll("#f-civilite button").forEach((b) => {
+    b.onclick = () => {
+      selCivilite = b.dataset.val;
+      document.querySelectorAll("#f-civilite button").forEach((x) => x.classList.remove("active", "period-active"));
+      b.classList.add("active", "period-active");
+    };
+  });
   document.getElementById("save-btn").onclick = async () => {
     const prenom = document.getElementById("f-prenom").value.trim();
     const nom = document.getElementById("f-nom").value.trim();
-    if (!prenom || !nom) { toast("Le nom et le prénom sont requis"); return; }
+    if (!nom) { toast("Le nom est requis"); return; }
     const client = {
       ...c,
       prenom, nom,
+      civilite: selCivilite,
       telephone: document.getElementById("f-tel").value.trim(),
       email: document.getElementById("f-email").value.trim(),
       adresse: document.getElementById("f-adresse").value.trim(),
@@ -963,7 +999,7 @@ async function openClientForm(existing, onSaved) {
 
 async function confirmDeleteClient(c) {
   openSheet(`
-    <h2>Supprimer ${escapeHtml(c.prenom)} ${escapeHtml(c.nom)} ?</h2>
+    <h2>Supprimer ${escapeHtml(clientFullName(c))} ?</h2>
     <p style="color:var(--smoke);font-size:14px;">Cette action supprimera aussi son historique d'interventions. Les rendez-vous déjà planifiés resteront dans l'agenda mais ne seront plus rattachés à un client.</p>
     <div class="sheet-actions">
       <button class="btn-secondary" id="cancel-btn">Annuler</button>
@@ -985,7 +1021,7 @@ async function confirmDeleteClient(c) {
 async function renderNearbyHtml(clientId, dateISO, excludeRdvId) {
   const wrap = (inner) => `
     <div class="info-block" style="margin-top:2px;">
-      <h3>Rendez-vous proches (fiche client)</h3>
+      <h3>Rendez-vous proches</h3>
       ${inner}
     </div>
   `;
@@ -1012,7 +1048,7 @@ async function renderNearbyHtml(clientId, dateISO, excludeRdvId) {
     .map((r) => {
       const rc = cmap[r.clientId];
       if (!rc || rc.lat == null) return null;
-      return { date: r.date, name: `${rc.prenom} ${rc.nom}`, distKm: haversineKm(client.lat, client.lon, rc.lat, rc.lon) };
+      return { date: r.date, name: clientFullName(rc), distKm: haversineKm(client.lat, client.lon, rc.lat, rc.lon) };
     })
     .filter((x) => x && x.distKm <= 15)
     .sort((a, b) => a.distKm - b.distKm)
@@ -1024,7 +1060,7 @@ async function renderNearbyHtml(clientId, dateISO, excludeRdvId) {
   return wrap(`
     <p class="near-hint" style="margin:0 0 6px;">Dans un rayon de 15 km, sur les 90 prochains jours. Touche une date pour la reprendre pour ce rendez-vous.</p>
     <div class="near-list">
-      ${withDist.map((x) => `<button type="button" class="near-item near-item-btn" data-copy-date="${x.date}"><span>${fmtDateFR(x.date)} — ${escapeHtml(x.name)}</span><span class="dist">${x.distKm.toFixed(1)} km</span></button>`).join("")}
+      ${withDist.map((x) => `<button type="button" class="near-item near-item-btn" data-copy-date="${x.date}"><span>${fmtDateFullFR(x.date)} — ${escapeHtml(x.name)}</span><span class="dist">${x.distKm.toFixed(1)} km</span></button>`).join("")}
     </div>
   `);
 }
@@ -1043,7 +1079,7 @@ async function computeNearbyByPosition(coords, horizonDays) {
     .map((r) => {
       const c = cmap[r.clientId];
       if (!c || c.lat == null) return null;
-      return { date: r.date, name: `${c.prenom} ${c.nom}`, distKm: haversineKm(coords.lat, coords.lon, c.lat, c.lon) };
+      return { date: r.date, name: clientFullName(c), distKm: haversineKm(coords.lat, coords.lon, c.lat, c.lon) };
     })
     .filter((x) => x && x.distKm <= 20)
     .sort((a, b) => a.distKm - b.distKm)
@@ -1133,16 +1169,16 @@ async function openRdvForm(prefill = {}, existing) {
 
   function updateSelectedDisplay() {
     const c = clients.find((x) => x.id === selectedClientId);
-    selectedEl.innerHTML = c ? `<div class="client-picker-chip">${escapeHtml(c.prenom)} ${escapeHtml(c.nom)}</div>` : `<div class="near-hint">Aucun client sélectionné</div>`;
+    selectedEl.innerHTML = c ? `<div class="client-picker-chip">${escapeHtml(clientFullName(c))}</div>` : `<div class="near-hint">Aucun client sélectionné</div>`;
   }
   updateSelectedDisplay();
 
   searchInput.oninput = () => {
     const q = searchInput.value.trim().toLowerCase();
     if (!q) { resultsEl.innerHTML = ""; return; }
-    const matches = clients.filter((c) => `${c.prenom} ${c.nom}`.toLowerCase().includes(q)).slice(0, 6);
+    const matches = clients.filter((c) => clientFullName(c).toLowerCase().includes(q)).slice(0, 6);
     resultsEl.innerHTML = matches.length
-      ? matches.map((c) => `<button type="button" class="client-picker-item" data-cid="${c.id}">${escapeHtml(c.prenom)} ${escapeHtml(c.nom)}</button>`).join("")
+      ? matches.map((c) => `<button type="button" class="client-picker-item" data-cid="${c.id}">${escapeHtml(clientFullName(c))}</button>`).join("")
       : `<p class="near-hint">Aucun client trouvé.</p>`;
     resultsEl.querySelectorAll("[data-cid]").forEach((btn) => {
       btn.onclick = () => {
@@ -1200,7 +1236,7 @@ async function openRdvForm(prefill = {}, existing) {
       const results = await computeNearbyByPosition(coords, days);
       const resultsEl = document.getElementById("geo-near-results");
       resultsEl.innerHTML = results.length
-        ? `<div class="near-list">${results.map((x) => `<button type="button" class="near-item near-item-btn" data-copy-date-geo="${x.date}"><span>${fmtDateFR(x.date)} — ${escapeHtml(x.name)}</span><span class="dist">${x.distKm.toFixed(1)} km</span></button>`).join("")}</div>`
+        ? `<div class="near-list">${results.map((x) => `<button type="button" class="near-item near-item-btn" data-copy-date-geo="${x.date}"><span>${fmtDateFullFR(x.date)} — ${escapeHtml(x.name)}</span><span class="dist">${x.distKm.toFixed(1)} km</span></button>`).join("")}</div>`
         : `<p class="near-hint">Aucun rendez-vous trouvé à proximité sur cette période.</p>`;
       resultsEl.querySelectorAll("[data-copy-date-geo]").forEach((el) => {
         el.onclick = () => {
@@ -1240,8 +1276,12 @@ async function openRdvForm(prefill = {}, existing) {
     };
     await DB.saveRendezvous(item);
     closeSheet();
-    toast(existing ? "Rendez-vous mis à jour" : "Rendez-vous créé");
-    navigate("agenda");
+    if (existing) {
+      toast("Rendez-vous mis à jour");
+      navigate("agenda");
+    } else {
+      openRdvConfirmSheet(item, client);
+    }
   };
   if (existing) {
     document.getElementById("del-btn").onclick = async () => {
@@ -1253,6 +1293,23 @@ async function openRdvForm(prefill = {}, existing) {
   }
 }
 
+async function openRdvConfirmSheet(item, client) {
+  const addr = item.adresse || client.adresse || "";
+  const smsBody = encodeURIComponent(
+    `Bonjour ${civilLabel(client) ? civilLabel(client) + " " : ""}${client.nom}, suite à votre appel je vous confirme la prise d'un rendez-vous pour un ${item.type === "entretien" ? "entretien" : "dépannage"}${addr ? " à l'adresse " + addr : ""} le ${fmtDateFullFR(item.date)}, bonne journée !`
+  );
+  const smsHref = client.telephone ? `sms:${client.telephone.replace(/\s+/g, "")}?body=${smsBody}` : null;
+
+  openSheet(`
+    <h2>Rendez-vous créé ✓</h2>
+    <p style="color:var(--smoke);font-size:14px;margin:-6px 0 16px;">${escapeHtml(clientFullName(client))} — ${fmtDateFullFR(item.date)}</p>
+    ${smsHref ? `<a class="btn-secondary" href="${smsHref}" style="display:block;text-align:center;text-decoration:none;padding:13px;border-radius:12px;margin-bottom:10px;">Récapitulatif par SMS</a>`
+      : '<p class="near-hint" style="margin-bottom:10px;">Aucun téléphone enregistré pour ce client — pas de SMS possible.</p>'}
+    <button class="btn-primary" id="done-btn" style="width:100%;">Terminer</button>
+  `);
+  document.getElementById("done-btn").onclick = () => { closeSheet(); navigate("agenda"); };
+}
+
 // ---------- Détail rendez-vous (RDV honoré / modifier / supprimer) ----------
 async function openRdvDetail(id) {
   const r = await DB.getRendezvous(id);
@@ -1262,12 +1319,12 @@ async function openRdvDetail(id) {
   const mapsUrl = addr ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(addr)}` : null;
   const wazeUrl = addr ? `https://waze.com/ul?q=${encodeURIComponent(addr)}&navigate=yes` : null;
   const telHref = client && client.telephone ? `tel:${client.telephone.replace(/\s+/g, "")}` : null;
-  const smsBody = client ? encodeURIComponent(`Bonjour ${client.prenom}, je suis en route pour notre rendez-vous. À tout de suite.`) : "";
+  const smsBody = client ? encodeURIComponent(`Bonjour ${civilLabel(client) ? civilLabel(client) + " " : ""}${client.nom}, je suis en route pour notre rendez-vous. À tout de suite.`) : "";
   const smsHref = client && client.telephone ? `sms:${client.telephone.replace(/\s+/g, "")}?body=${smsBody}` : null;
   const period = periodLabel(r.periode);
 
   openSheet(`
-    <h2>${client ? escapeHtml(client.prenom) + " " + escapeHtml(client.nom) : "Rendez-vous"}</h2>
+    <h2>${client ? escapeHtml(clientFullName(client)) : "Rendez-vous"}</h2>
     <p style="color:var(--smoke);font-size:13px;margin:-10px 0 4px;">${fmtDateFR(r.date)}${period ? " · " + period : ""} · ${r.type === "entretien" ? "Entretien" : "Dépannage"}${r.statut === "honore" ? " · <span style=\"color:var(--moss);font-weight:600;\">✓ Honoré</span>" : ""}</p>
     ${addr ? `<p style="font-size:13.5px;color:var(--ink-dim);margin:0 0 4px;">📍 ${escapeHtml(addr)}</p>` : ""}
     ${r.statut === "honore" && r.compteRenduHonore ? `<p style="font-size:13.5px;color:var(--ink-dim);margin:0 0 4px;">📝 ${escapeHtml(r.compteRenduHonore)}</p>` : (r.commentaire ? `<p style="font-size:13.5px;color:var(--ink-dim);margin:0 0 4px;">${escapeHtml(r.commentaire)}</p>` : "")}
@@ -1312,7 +1369,7 @@ async function openRdvDetail(id) {
 async function openHonoreForm(r, client) {
   openSheet(`
     <h2>RDV honoré</h2>
-    <p style="color:var(--smoke);font-size:13px;margin:-8px 0 14px;">${client ? escapeHtml(client.prenom) + " " + escapeHtml(client.nom) : ""} — ${fmtDateFR(r.date)}</p>
+    <p style="color:var(--smoke);font-size:13px;margin:-8px 0 14px;">${client ? escapeHtml(clientFullName(client)) : ""} — ${fmtDateFR(r.date)}</p>
     <p style="font-size:13.5px;color:var(--ink-dim);margin:0 0 14px;">Ce rendez-vous sera ajouté à l'historique du client, avec un compte-rendu si tu le souhaites.</p>
     <div class="form-row"><label>Compte-rendu (facultatif)</label><textarea id="f-compte-rendu" placeholder="Ex : nettoyage complet, RAS...">${escapeHtml(r.commentaire || "")}</textarea></div>
     <div class="sheet-actions">
@@ -1345,7 +1402,7 @@ async function openInterventionClientPicker() {
     <h2>Pour quel client ?</h2>
     <div class="form-row">
       <select id="f-client-pick" style="width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:10px;font-size:15px;background:var(--surface);color:var(--ink);">
-        ${clients.map((c) => `<option value="${c.id}">${escapeHtml(c.prenom)} ${escapeHtml(c.nom)}</option>`).join("")}
+        ${clients.map((c) => `<option value="${c.id}">${escapeHtml(clientFullName(c))}</option>`).join("")}
       </select>
     </div>
     <div class="sheet-actions">
@@ -1366,7 +1423,7 @@ async function openInterventionForm(client, existing) {
   const date = it.date || toISO(new Date());
   openSheet(`
     <h2>${existing ? "Modifier l'intervention" : "Nouvelle intervention"}</h2>
-    <p style="color:var(--smoke);font-size:13px;margin:-8px 0 14px;">${escapeHtml(client.prenom)} ${escapeHtml(client.nom)}</p>
+    <p style="color:var(--smoke);font-size:13px;margin:-8px 0 14px;">${escapeHtml(clientFullName(client))}</p>
     <div class="form-row"><label>Date</label><input type="date" id="f-date" value="${date}" /></div>
     <div class="form-row">
       <label>Type</label>

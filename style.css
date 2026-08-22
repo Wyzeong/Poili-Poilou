@@ -757,3 +757,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; animation: none !important; }
 }
+
+/* Correctif : .sheet et .btn-back déclarent display:flex, ce qui peut prendre le pas
+   sur l'attribut HTML "hidden" (même spécificité CSS que la règle navigateur par
+   défaut). Cette règle garantit qu'ils restent bien invisibles quand hidden est posé. */
+.sheet[hidden], .btn-back[hidden] { display: none !important; }

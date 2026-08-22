@@ -2,7 +2,7 @@
    Vues : Accueil / Agenda / Clients / Fiche client / Paramètres
    Toute la donnée passe par DB (db.js → IndexedDB). */
 
-const APP_VERSION = "1.11.1"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
+const APP_VERSION = "1.12.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
 
 const JOURS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
 const JOURS_COURT = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
@@ -236,15 +236,23 @@ function recapNameLine(c) {
 }
 
 // Extrait le numéro et le montant du chèque depuis le compte-rendu libre saisi à
-// l'honoration du RDV (ex : "Numéro de chèque : 123456, montant du chèque : 450€").
+// l'honoration du RDV. Ne dépend d'aucun libellé : repère directement les motifs
+// (montant = nombre suivi de €, numéro = suite de 6 à 8 chiffres ailleurs dans le texte).
+// Fonctionne aussi bien avec juste "1234567 125.65€" qu'avec un texte plus détaillé.
 function parseChequeInfo(text) {
   if (!text) return { numero: "", montant: "" };
-  const numMatch = text.match(/num[ée]ro\s*(?:de\s*)?ch[eè]que\s*:?\s*([^\n,;]+)/i);
-  const montantMatch = text.match(/montant\s*(?:du\s*ch[eè]que)?\s*:?\s*([^\n,;]+)/i);
-  return {
-    numero: numMatch ? numMatch[1].trim() : "",
-    montant: montantMatch ? montantMatch[1].trim() : "",
-  };
+
+  const montantMatch = text.match(/(\d+(?:[.,]\d{1,2})?)\s*€/);
+  const montant = montantMatch ? `${montantMatch[1]}€` : "";
+
+  let searchText = text;
+  if (montantMatch) {
+    searchText = text.slice(0, montantMatch.index) + text.slice(montantMatch.index + montantMatch[0].length);
+  }
+  const numeroMatch = searchText.match(/\b\d{6,8}\b/);
+  const numero = numeroMatch ? numeroMatch[0] : "";
+
+  return { numero, montant };
 }
 
 function formatRecapEntry(e) {

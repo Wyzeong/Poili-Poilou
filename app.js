@@ -2,7 +2,7 @@
    Vues : Accueil / Agenda / Clients / Fiche client / Paramètres
    Toute la donnée passe par DB (db.js → IndexedDB). */
 
-const APP_VERSION = "1.10.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
+const APP_VERSION = "1.10.1"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
 
 const JOURS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
 const JOURS_COURT = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
@@ -309,7 +309,7 @@ async function refreshAgendaBody() {
   }
 
   const days = Array.from({ length: 5 }, (_, i) => addDays(state.weekStart, i));
-  const startISO = toISO(days[0]), endISO = toISO(days[6]);
+  const startISO = toISO(days[0]), endISO = toISO(days[days.length - 1]);
   const weekRdvs = await DB.listRendezvousRange(startISO, endISO);
   const byDate = {};
   weekRdvs.forEach((r) => { (byDate[r.date] ||= []).push(r); });
@@ -323,7 +323,7 @@ async function refreshAgendaBody() {
       <button id="week-prev" aria-label="Semaine précédente">
         <svg viewBox="0 0 24 24" width="18" height="18"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M15 6l-6 6 6 6"/></svg>
       </button>
-      <button id="week-today" class="week-label">${fmtShort(days[0])} – ${fmtShort(days[6])}</button>
+      <button id="week-today" class="week-label">${fmtShort(days[0])} – ${fmtShort(days[days.length - 1])}</button>
       <button id="week-next" aria-label="Semaine suivante">
         <svg viewBox="0 0 24 24" width="18" height="18"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M9 6l6 6-6 6"/></svg>
       </button>

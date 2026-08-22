@@ -2,7 +2,7 @@
    Vues : Accueil / Agenda / Clients / Fiche client / Paramètres
    Toute la donnée passe par DB (db.js → IndexedDB). */
 
-const APP_VERSION = "1.11.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
+const APP_VERSION = "1.11.1"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
 
 const JOURS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
 const JOURS_COURT = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
@@ -216,9 +216,11 @@ async function buildRecapData(startISO, endISO) {
   for (const r of rdvs) {
     const c = cmap[r.clientId];
     const entry = {
-      nom: c ? clientFullName(c) : "Client supprimé",
+      nomLigne: recapNameLine(c),
       adresse: (c && c.adresse) || r.adresse || "",
+      marque: (c && c.marque) || "",
       modele: (c && c.modele) || "",
+      raison: r.type === "entretien" ? "Entretien" : "Dépannage",
       compteRendu: r.compteRenduHonore || "",
     };
     if (c && c.nouveauClient === "oui") nouveaux.push(entry);
@@ -227,12 +229,36 @@ async function buildRecapData(startISO, endISO) {
   return { nouveaux, habituels };
 }
 
+function recapNameLine(c) {
+  if (!c) return "Client supprimé";
+  const nomMaj = (c.nom || "").toUpperCase();
+  return c.prenom ? `${nomMaj}, ${c.prenom}` : nomMaj;
+}
+
+// Extrait le numéro et le montant du chèque depuis le compte-rendu libre saisi à
+// l'honoration du RDV (ex : "Numéro de chèque : 123456, montant du chèque : 450€").
+function parseChequeInfo(text) {
+  if (!text) return { numero: "", montant: "" };
+  const numMatch = text.match(/num[ée]ro\s*(?:de\s*)?ch[eè]que\s*:?\s*([^\n,;]+)/i);
+  const montantMatch = text.match(/montant\s*(?:du\s*ch[eè]que)?\s*:?\s*([^\n,;]+)/i);
+  return {
+    numero: numMatch ? numMatch[1].trim() : "",
+    montant: montantMatch ? montantMatch[1].trim() : "",
+  };
+}
+
 function formatRecapEntry(e) {
-  let line = e.nom;
-  if (e.adresse) line += ` — ${e.adresse}`;
-  if (e.modele) line += ` — Modèle : ${e.modele}`;
-  line += e.compteRendu ? ` — ${e.compteRendu}` : " — ⚠️ compte-rendu non renseigné";
-  return line;
+  const { numero, montant } = parseChequeInfo(e.compteRendu);
+  const lines = [
+    `${e.nomLigne} :`,
+    e.adresse || "(adresse non renseignée)",
+    `Raison : ${e.raison}`,
+    `Marque : ${e.marque || "—"}`,
+    `Modèle : ${e.modele || "—"}`,
+    `Numéro de chèque : ${numero || "—"}`,
+    `Montant : ${montant || "—"}`,
+  ];
+  return lines.join("\n");
 }
 
 function currentRecapRange() {
@@ -263,10 +289,10 @@ async function openRecapHonores() {
 
   let body = `Bonjour,\n\nVoici le récapitulatif des interventions honorées du ${fmtDateFullFR(startISO)} au ${fmtDateFullFR(endISO)}.\n\n`;
   if (nouveaux.length) {
-    body += "Nouveaux clients :\n" + nouveaux.map((e) => `- ${formatRecapEntry(e)}`).join("\n") + "\n\n";
+    body += "Nouveaux clients :\n\n" + nouveaux.map((e) => formatRecapEntry(e)).join("\n\n") + "\n\n";
   }
   if (habituels.length) {
-    body += "Clients habituels :\n" + habituels.map((e) => `- ${formatRecapEntry(e)}`).join("\n") + "\n\n";
+    body += "Clients habituels :\n\n" + habituels.map((e) => formatRecapEntry(e)).join("\n\n") + "\n\n";
   }
   body += "Merci,";
 

@@ -1,10 +1,11 @@
-const CACHE_NAME = "tournees-poeles-v1.4.0";
+const CACHE_NAME = "tournees-poeles-v1.5.0";
 const APP_SHELL = [
   "./",
   "./index.html",
   "./style.css",
   "./db.js",
   "./geo.js",
+  "./drive.js",
   "./app.js",
   "./manifest.json",
   "./icons/icon-192.png",

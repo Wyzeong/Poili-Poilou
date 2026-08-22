@@ -2,7 +2,7 @@
    Vues : Accueil / Agenda / Clients / Fiche client / Paramètres
    Toute la donnée passe par DB (db.js → IndexedDB). */
 
-const APP_VERSION = "1.4.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
+const APP_VERSION = "1.5.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
 
 const JOURS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
 const JOURS_COURT = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
@@ -640,8 +640,13 @@ async function renderReglages() {
     </div>
 
     <div class="info-block">
+      <h3>Sauvegarde cloud (Google Drive)</h3>
+      <div id="drive-status"></div>
+    </div>
+
+    <div class="info-block">
       <h3>Sauvegarde locale</h3>
-      <p style="font-size:13.5px;color:var(--smoke);margin:0 0 12px;">Exporte toutes les données (clients, rendez-vous, interventions) dans un fichier que tu peux garder de côté. Une sauvegarde automatique externe (protégeant contre la perte ou la casse du téléphone) arrivera dans une prochaine étape.</p>
+      <p style="font-size:13.5px;color:var(--smoke);margin:0 0 12px;">Exporte toutes les données (clients, rendez-vous, interventions) dans un fichier que tu peux garder de côté, en plus de la sauvegarde cloud ci-dessus.</p>
       <div class="sheet-actions" style="margin-top:0;">
         <button class="btn-secondary" id="export-btn">Exporter maintenant</button>
         <button class="btn-secondary" id="import-btn">Importer</button>
@@ -678,6 +683,8 @@ async function renderReglages() {
     if (state.view === "reglages") render();
   };
 
+  await renderDriveStatus();
+
   document.getElementById("export-btn").onclick = async () => {
     await runExport();
     if (state.view === "reglages") render();
@@ -702,13 +709,17 @@ async function renderReglages() {
   };
 }
 
-async function runExport() {
-  const data = {
+async function buildBackupPayload() {
+  return {
     clients: await DB.listClients(),
     rendezvous: await DB.listRendezvous(),
     interventions: (await Promise.all((await DB.listClients()).map((c) => DB.listInterventionsForClient(c.id)))).flat(),
     exportedAt: new Date().toISOString(),
   };
+}
+
+async function runExport() {
+  const data = await buildBackupPayload();
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -718,6 +729,85 @@ async function runExport() {
   URL.revokeObjectURL(url);
   await DB.setParam("lastExportAt", new Date().toISOString());
   toast("Export terminé ✓");
+}
+
+// ---------- Sauvegarde cloud (Google Drive) ----------
+const CLOUD_BACKUP_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
+async function runCloudBackup() {
+  const data = await buildBackupPayload();
+  try {
+    await driveUploadBackup(JSON.stringify(data, null, 2));
+    await DB.setParam("lastCloudBackupAt", new Date().toISOString());
+    await DB.setParam("lastCloudError", null);
+    return { ok: true };
+  } catch (e) {
+    const msg = /interaction_required|access_denied|invalid_grant/.test(e.message)
+      ? "Reconnexion nécessaire (accès expiré ou révoqué)"
+      : (!navigator.onLine ? "Pas de connexion Internet" : e.message);
+    await DB.setParam("lastCloudError", { message: msg, at: new Date().toISOString() });
+    return { ok: false, error: msg };
+  }
+}
+
+async function maybeAutoCloudBackup() {
+  const connected = await DB.getParam("driveConnected", false);
+  if (!connected) return;
+  const last = await DB.getParam("lastCloudBackupAt", null);
+  if (last && Date.now() - new Date(last).getTime() < CLOUD_BACKUP_INTERVAL_MS) return;
+  await runCloudBackup();
+  if (state.view === "reglages") renderDriveStatus();
+}
+
+async function renderDriveStatus() {
+  const el = document.getElementById("drive-status");
+  if (!el) return;
+  const connected = await DB.getParam("driveConnected", false);
+  const lastBackup = await DB.getParam("lastCloudBackupAt", null);
+  const lastError = await DB.getParam("lastCloudError", null);
+
+  if (!connected) {
+    el.innerHTML = `
+      <p style="font-size:13.5px;color:var(--smoke);margin:0 0 12px;">Connecte un compte Google Drive dédié pour que tes données soient sauvegardées automatiquement chaque jour, à l'abri d'une casse ou d'un vol du téléphone.</p>
+      <button class="btn-primary" id="drive-connect-btn" style="width:100%;">Connecter Google Drive</button>
+    `;
+    document.getElementById("drive-connect-btn").onclick = async () => {
+      try {
+        toast("Connexion à Google…");
+        await driveConnect();
+        await DB.setParam("driveConnected", true);
+        toast("Connecté ✓ — première sauvegarde en cours…");
+        const r = await runCloudBackup();
+        toast(r.ok ? "Sauvegarde Drive réussie ✓" : "Échec de la sauvegarde : " + r.error);
+        renderDriveStatus();
+      } catch (e) {
+        toast("Connexion impossible : " + e.message);
+      }
+    };
+    return;
+  }
+
+  el.innerHTML = `
+    <p class="geo-status geo-ok" style="margin:0 0 4px;">✓ Connecté à Google Drive</p>
+    <div class="info-row"><span class="k">Dernière sauvegarde cloud</span><span class="v">${lastBackup ? fmtDateTimeFR(lastBackup) : "Jamais"}</span></div>
+    ${lastError ? `<p class="geo-status geo-pending" style="margin:6px 0 0;">⚠️ Dernier échec : ${escapeHtml(lastError.message)} (${fmtDateTimeFR(lastError.at)})</p>` : ""}
+    <div class="sheet-actions" style="margin-top:10px;">
+      <button class="btn-secondary" id="drive-backup-btn">Sauvegarder maintenant</button>
+      <button class="btn-danger" id="drive-disconnect-btn">Déconnecter</button>
+    </div>
+  `;
+  document.getElementById("drive-backup-btn").onclick = async () => {
+    toast("Sauvegarde en cours…");
+    const r = await runCloudBackup();
+    toast(r.ok ? "Sauvegarde Drive réussie ✓" : "Échec de la sauvegarde : " + r.error);
+    renderDriveStatus();
+  };
+  document.getElementById("drive-disconnect-btn").onclick = async () => {
+    driveDisconnect();
+    await DB.setParam("driveConnected", false);
+    toast("Déconnecté de Google Drive");
+    renderDriveStatus();
+  };
 }
 
 // ---------- Sheet générique ----------
@@ -1314,3 +1404,4 @@ if ("serviceWorker" in navigator) {
 // ---------- Démarrage ----------
 history.replaceState(historySnapshot(), "", "#accueil");
 render();
+maybeAutoCloudBackup();

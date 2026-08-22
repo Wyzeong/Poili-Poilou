@@ -2,7 +2,7 @@
    Vues : Accueil / Agenda / Clients / Fiche client / Paramètres
    Toute la donnée passe par DB (db.js → IndexedDB). */
 
-const APP_VERSION = "1.12.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
+const APP_VERSION = "1.14.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
 
 const JOURS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
 const JOURS_COURT = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
@@ -221,7 +221,8 @@ async function buildRecapData(startISO, endISO) {
       marque: (c && c.marque) || "",
       modele: (c && c.modele) || "",
       raison: r.type === "entretien" ? "Entretien" : "Dépannage",
-      compteRendu: r.compteRenduHonore || "",
+      paiement: r.paiement || null,
+      compteRendu: r.compteRenduHonore || "", // repli pour les RDV honorés avant l'ajout du formulaire structuré
     };
     if (c && c.nouveauClient === "oui") nouveaux.push(entry);
     else habituels.push(entry);
@@ -235,36 +236,15 @@ function recapNameLine(c) {
   return c.prenom ? `${nomMaj}, ${c.prenom}` : nomMaj;
 }
 
-// Extrait le numéro et le montant du chèque depuis le compte-rendu libre saisi à
-// l'honoration du RDV. Ne dépend d'aucun libellé : repère directement les motifs
-// (montant = nombre suivi de €, numéro = suite de 6 à 8 chiffres ailleurs dans le texte).
-// Fonctionne aussi bien avec juste "1234567 125.65€" qu'avec un texte plus détaillé.
-function parseChequeInfo(text) {
-  if (!text) return { numero: "", montant: "" };
-
-  const montantMatch = text.match(/(\d+(?:[.,]\d{1,2})?)\s*€/);
-  const montant = montantMatch ? `${montantMatch[1]}€` : "";
-
-  let searchText = text;
-  if (montantMatch) {
-    searchText = text.slice(0, montantMatch.index) + text.slice(montantMatch.index + montantMatch[0].length);
-  }
-  const numeroMatch = searchText.match(/\b\d{6,8}\b/);
-  const numero = numeroMatch ? numeroMatch[0] : "";
-
-  return { numero, montant };
-}
-
 function formatRecapEntry(e) {
-  const { numero, montant } = parseChequeInfo(e.compteRendu);
+  const paiementLines = e.paiement ? formatPaiementLines(e.paiement) : (e.compteRendu ? [e.compteRendu] : ["⚠️ Paiement non renseigné"]);
   const lines = [
     `${e.nomLigne} :`,
     e.adresse || "(adresse non renseignée)",
     `Raison : ${e.raison}`,
     `Marque : ${e.marque || "—"}`,
     `Modèle : ${e.modele || "—"}`,
-    `Numéro de chèque : ${numero || "—"}`,
-    `Montant : ${montant || "—"}`,
+    ...paiementLines,
   ];
   return lines.join("\n");
 }
@@ -1599,7 +1579,7 @@ async function openRdvDetail(id) {
     <h2>${client ? escapeHtml(clientFullName(client)) : "Rendez-vous"}</h2>
     <p style="color:var(--smoke);font-size:13px;margin:-10px 0 4px;">${fmtDateFR(r.date)}${period ? " · " + period : ""} · ${r.type === "entretien" ? "Entretien" : "Dépannage"}${r.statut === "honore" ? " · <span style=\"color:var(--moss);font-weight:600;\">✓ Honoré</span>" : ""}</p>
     ${addr ? `<p style="font-size:13.5px;color:var(--ink-dim);margin:0 0 4px;">📍 ${escapeHtml(addr)}</p>` : ""}
-    ${r.statut === "honore" && r.compteRenduHonore ? `<p style="font-size:13.5px;color:var(--ink-dim);margin:0 0 4px;">📝 ${escapeHtml(r.compteRenduHonore)}</p>` : (r.commentaire ? `<p style="font-size:13.5px;color:var(--ink-dim);margin:0 0 4px;">${escapeHtml(r.commentaire)}</p>` : "")}
+    ${r.statut === "honore" ? `<p style="font-size:13.5px;color:var(--ink-dim);margin:0 0 4px;">📝 ${(r.paiement ? formatPaiementLines(r.paiement) : (r.compteRenduHonore ? [r.compteRenduHonore] : ["⚠️ Paiement non renseigné"])).map(escapeHtml).join(" — ")}</p>` : (r.commentaire ? `<p style="font-size:13.5px;color:var(--ink-dim);margin:0 0 4px;">${escapeHtml(r.commentaire)}</p>` : "")}
 
     <div class="quick-actions">
       <a class="qa-btn" href="${wazeUrl || "#"}" ${wazeUrl ? "" : 'aria-disabled="true"'}>
@@ -1639,31 +1619,141 @@ async function openRdvDetail(id) {
 }
 
 async function openHonoreForm(r, client) {
+  let mode = (r.paiement && r.paiement.mode) || "cheque";
+  let cheques = (r.paiement && r.paiement.mode === "cheque" && r.paiement.cheques && r.paiement.cheques.length)
+    ? r.paiement.cheques.map((c) => ({ ...c }))
+    : [{ numero: "", montant: "", commentaire: "" }];
+  let virement = (r.paiement && r.paiement.mode === "virement")
+    ? { montant: r.paiement.montant || "", commentaire: r.paiement.commentaire || "" }
+    : { montant: "", commentaire: "" };
+
   openSheet(`
     <h2>RDV honoré</h2>
     <p style="color:var(--smoke);font-size:13px;margin:-8px 0 14px;">${client ? escapeHtml(clientFullName(client)) : ""} — ${fmtDateFR(r.date)}</p>
-    <p style="font-size:13.5px;color:var(--ink-dim);margin:0 0 14px;">Ce rendez-vous sera ajouté à l'historique du client, avec un compte-rendu si tu le souhaites.</p>
-    <div class="form-row"><label>Compte-rendu (facultatif)</label><textarea id="f-compte-rendu" placeholder="Ex : nettoyage complet, RAS...">${escapeHtml(r.commentaire || "")}</textarea></div>
+    <p style="font-size:13.5px;color:var(--ink-dim);margin:0 0 14px;">Ce rendez-vous sera ajouté à l'historique du client.</p>
+    <div class="form-row">
+      <label>Mode de paiement</label>
+      <div class="pill-choice" id="f-paiement-mode">
+        <button type="button" data-val="cheque" class="${mode === "cheque" ? "active period-active" : ""}">Chèque</button>
+        <button type="button" data-val="virement" class="${mode === "virement" ? "active period-active" : ""}">Virement bancaire</button>
+      </div>
+    </div>
+    <div id="paiement-details"></div>
     <div class="sheet-actions">
       <button class="btn-secondary" id="cancel-btn">Annuler</button>
       <button class="btn-primary" id="confirm-btn">Valider</button>
     </div>
   `);
+
+  const detailsEl = document.getElementById("paiement-details");
+
+  function readChequesFromDOM() {
+    cheques = cheques.map((_, i) => ({
+      numero: (document.getElementById(`f-cheque-numero-${i}`) || {}).value || "",
+      montant: (document.getElementById(`f-cheque-montant-${i}`) || {}).value || "",
+      commentaire: (document.getElementById(`f-cheque-comment-${i}`) || {}).value || "",
+    }));
+  }
+  function readVirementFromDOM() {
+    const m = document.getElementById("f-virement-montant");
+    const c = document.getElementById("f-virement-comment");
+    if (m) virement.montant = m.value;
+    if (c) virement.commentaire = c.value;
+  }
+
+  function renderDetails() {
+    if (mode === "cheque") {
+      detailsEl.innerHTML = `
+        <div class="form-row">
+          <label>Nombre de chèques</label>
+          <input type="number" id="f-nb-cheques" min="1" max="6" value="${cheques.length}" />
+        </div>
+        <div id="cheques-list"></div>
+      `;
+      renderChequesList();
+      document.getElementById("f-nb-cheques").onchange = (e) => {
+        readChequesFromDOM();
+        let n = parseInt(e.target.value, 10);
+        if (!n || n < 1) n = 1;
+        if (n > 6) n = 6;
+        while (cheques.length < n) cheques.push({ numero: "", montant: "", commentaire: "" });
+        cheques = cheques.slice(0, n);
+        renderChequesList();
+      };
+    } else {
+      detailsEl.innerHTML = `
+        <div class="form-row"><label>Montant du virement (€)</label><input type="text" inputmode="decimal" id="f-virement-montant" value="${escapeAttr(virement.montant)}" /></div>
+        <div class="form-row"><label>Commentaire (facultatif)</label><input type="text" id="f-virement-comment" value="${escapeAttr(virement.commentaire)}" /></div>
+      `;
+    }
+  }
+
+  function renderChequesList() {
+    const listEl = document.getElementById("cheques-list");
+    listEl.innerHTML = cheques.map((c, i) => `
+      <div class="info-block" style="margin-top:8px;">
+        <h3>Chèque ${i + 1}</h3>
+        <div class="form-row"><label>Numéro</label><input type="text" inputmode="numeric" id="f-cheque-numero-${i}" value="${escapeAttr(c.numero)}" /></div>
+        <div class="form-row"><label>Montant (€)</label><input type="text" inputmode="decimal" id="f-cheque-montant-${i}" value="${escapeAttr(c.montant)}" /></div>
+        <div class="form-row"><label>Commentaire (facultatif)</label><input type="text" id="f-cheque-comment-${i}" value="${escapeAttr(c.commentaire)}" /></div>
+      </div>
+    `).join("");
+  }
+
+  renderDetails();
+
+  document.querySelectorAll("#f-paiement-mode button").forEach((b) => {
+    b.onclick = () => {
+      if (mode === "cheque") readChequesFromDOM(); else readVirementFromDOM();
+      mode = b.dataset.val;
+      document.querySelectorAll("#f-paiement-mode button").forEach((x) => x.classList.remove("active", "period-active"));
+      b.classList.add("active", "period-active");
+      renderDetails();
+    };
+  });
+
   document.getElementById("cancel-btn").onclick = closeSheet;
   document.getElementById("confirm-btn").onclick = async () => {
+    let paiement;
+    if (mode === "cheque") {
+      readChequesFromDOM();
+      paiement = { mode: "cheque", cheques: cheques.map((c) => ({ numero: c.numero.trim(), montant: c.montant.trim(), commentaire: c.commentaire.trim() })) };
+    } else {
+      readVirementFromDOM();
+      paiement = { mode: "virement", montant: virement.montant.trim(), commentaire: virement.commentaire.trim() };
+    }
+
     await DB.saveIntervention({
       clientId: r.clientId,
       date: r.date,
       type: r.type,
-      description: document.getElementById("f-compte-rendu").value.trim(),
+      description: formatPaiementLines(paiement).join(" / "),
     });
     r.statut = "honore";
-    r.compteRenduHonore = document.getElementById("f-compte-rendu").value.trim();
+    r.paiement = paiement;
     await DB.saveRendezvous(r);
     closeSheet();
     toast("Rendez-vous honoré, ajouté à l'historique");
     navigate("agenda");
   };
+}
+
+function formatPaiementLines(paiement) {
+  if (!paiement) return ["⚠️ Paiement non renseigné"];
+  if (paiement.mode === "virement") {
+    const montant = paiement.montant ? `${paiement.montant}€` : "—";
+    return [`Virement bancaire — ${montant}${paiement.commentaire ? " — " + paiement.commentaire : ""}`];
+  }
+  const cheques = paiement.cheques || [];
+  if (cheques.length === 0) return ["⚠️ Paiement non renseigné"];
+  if (cheques.length === 1) {
+    const c = cheques[0];
+    return [
+      `Numéro de chèque : ${c.numero || "—"}`,
+      `Montant : ${c.montant ? c.montant + "€" : "—"}${c.commentaire ? " — " + c.commentaire : ""}`,
+    ];
+  }
+  return cheques.map((c, i) => `Chèque ${i + 1} — Numéro : ${c.numero || "—"} / Montant : ${c.montant ? c.montant + "€" : "—"}${c.commentaire ? " — " + c.commentaire : ""}`);
 }
 
 // ---------- Formulaire intervention ----------

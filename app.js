@@ -2,7 +2,7 @@
    Vues : Accueil / Agenda / Clients / Fiche client / Paramètres
    Toute la donnée passe par DB (db.js → IndexedDB). */
 
-const APP_VERSION = "1.10.1"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
+const APP_VERSION = "1.10.2"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
 
 const JOURS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
 const JOURS_COURT = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
@@ -929,7 +929,7 @@ async function renderCalendarStatus() {
 
   if (!connected) {
     el.innerHTML = `
-      <p style="font-size:13.5px;color:var(--smoke);margin:0 0 12px;">Connecte le Google Agenda personnel de ton père (RDV médicaux, etc.) pour voir ses engagements directement dans l'agenda de l'appli et éviter les doubles réservations. Rien n'est jamais modifié sur son agenda — uniquement de la lecture.</p>
+      <p style="font-size:13.5px;color:var(--smoke);margin:0 0 12px;">Affiche tes rendez-vous Google Agenda dans l'appli, en lecture seule, pour éviter les doubles réservations.</p>
       <button class="btn-primary" id="cal-connect-btn" style="width:100%;">Connecter Google Agenda</button>
     `;
     document.getElementById("cal-connect-btn").onclick = async () => {

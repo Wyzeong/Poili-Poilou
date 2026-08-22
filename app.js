@@ -2,7 +2,7 @@
    Vues : Accueil / Agenda / Clients / Fiche client / Paramètres
    Toute la donnée passe par DB (db.js → IndexedDB). */
 
-const APP_VERSION = "1.8.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
+const APP_VERSION = "1.9.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
 
 const JOURS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
 const JOURS_COURT = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
@@ -60,11 +60,11 @@ function clientInitials(c) {
   const b = c.prenom ? (c.nom || "?")[0] : (c.nom || "??")[1] || "?";
   return (a + b).toUpperCase();
 }
-function civilLabel(c) {
-  if (!c) return "";
-  if (c.civilite === "femme") return "Madame";
-  if (c.civilite === "homme") return "Monsieur";
-  return "";
+function nouveauClientLabel(c) {
+  if (!c) return "—";
+  if (c.nouveauClient === "oui") return "Oui";
+  if (c.nouveauClient === "non") return "Non";
+  return "—";
 }
 function fmtDateFullFR(iso) {
   const [y, m, d] = iso.split("-").map(Number);
@@ -185,6 +185,14 @@ async function renderAccueil() {
         </span>
         <svg class="hb-chev" viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </button>
+      <button class="home-btn" data-nav="recap-ets">
+        <span class="hb-icon"><svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M4 4h16v12H7l-3 3V4zm2 3h12v2H6V7zm0 4h8v2H6v-2z"/></svg></span>
+        <span class="hb-text">
+          <span class="hb-title">Récapitulatif ETS Gallay</span>
+          <span class="hb-sub">Envoyer le résumé de la semaine</span>
+        </span>
+        <svg class="hb-chev" viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
     </div>
   `;
 
@@ -192,6 +200,83 @@ async function renderAccueil() {
   root.querySelector('[data-nav="clients"]').onclick = () => navigate("clients");
   root.querySelector('[data-nav="reglages"]').onclick = () => navigate("reglages");
   root.querySelector('[data-nav="rdv-new"]').onclick = () => openRdvForm();
+  root.querySelector('[data-nav="recap-ets"]').onclick = () => openRecapEtsGallay();
+}
+
+// ---------- Récapitulatif ETS Gallay (facturation) ----------
+const ETS_GALLAY_EMAIL = "etsgallay@gmail.com";
+
+async function buildRecapData(startISO, endISO) {
+  const rdvs = (await DB.listRendezvous())
+    .filter((r) => r.statut === "honore" && r.date >= startISO && r.date <= endISO)
+    .sort((a, b) => a.date.localeCompare(b.date));
+  const clients = await DB.listClients();
+  const cmap = Object.fromEntries(clients.map((c) => [c.id, c]));
+
+  const nouveaux = [];
+  const habituels = [];
+  for (const r of rdvs) {
+    const c = cmap[r.clientId];
+    const entry = {
+      nom: c ? clientFullName(c) : "Client supprimé",
+      adresse: (c && c.adresse) || r.adresse || "",
+      modele: (c && c.modele) || "",
+      compteRendu: r.compteRenduHonore || "",
+    };
+    if (c && c.nouveauClient === "oui") nouveaux.push(entry);
+    else habituels.push(entry);
+  }
+  return { nouveaux, habituels };
+}
+
+function formatRecapEntry(e) {
+  let line = e.nom;
+  if (e.adresse) line += ` — ${e.adresse}`;
+  if (e.modele) line += ` — Modèle : ${e.modele}`;
+  line += e.compteRendu ? ` — ${e.compteRendu}` : " — ⚠️ compte-rendu non renseigné";
+  return line;
+}
+
+function currentRecapRange() {
+  const today = new Date();
+  const monday = startOfWeek(today);
+  const friday = addDays(monday, 4);
+  const todayISO = toISO(today);
+  const fridayISO = toISO(friday);
+  const endISO = todayISO <= fridayISO ? todayISO : fridayISO;
+  return { startISO: toISO(monday), endISO };
+}
+
+async function openRecapEtsGallay() {
+  const { startISO, endISO } = currentRecapRange();
+  const { nouveaux, habituels } = await buildRecapData(startISO, endISO);
+
+  if (nouveaux.length === 0 && habituels.length === 0) {
+    toast("Aucun rendez-vous honoré sur cette période pour l'instant");
+    return;
+  }
+
+  let body = `Bonjour,\n\nVoici le récapitulatif des interventions honorées du ${fmtDateFullFR(startISO)} au ${fmtDateFullFR(endISO)}.\n\n`;
+  if (nouveaux.length) {
+    body += "Nouveaux clients :\n" + nouveaux.map((e) => `- ${formatRecapEntry(e)}`).join("\n") + "\n\n";
+  }
+  if (habituels.length) {
+    body += "Clients habituels :\n" + habituels.map((e) => `- ${formatRecapEntry(e)}`).join("\n") + "\n\n";
+  }
+  body += "Merci,";
+
+  const subject = `Récapitulatif interventions — semaine du ${fmtDateFR(startISO)} au ${fmtDateFR(endISO)}`;
+  window.location.href = `mailto:${ETS_GALLAY_EMAIL}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+}
+
+async function maybeFridayReminder() {
+  const today = new Date();
+  if (today.getDay() !== 5) return; // 5 = vendredi
+  const todayISO = toISO(today);
+  const lastShown = await DB.getParam("lastFridayReminderDate", null);
+  if (lastShown === todayISO) return;
+  await DB.setParam("lastFridayReminderDate", todayISO);
+  toast("N'oublie pas d'envoyer le récapitulatif ETS Gallay aujourd'hui !");
 }
 
 // ---------- Vue Agenda (colonnes semaine, façon Google Agenda) ----------
@@ -223,7 +308,7 @@ async function refreshAgendaBody() {
     return;
   }
 
-  const days = Array.from({ length: 7 }, (_, i) => addDays(state.weekStart, i));
+  const days = Array.from({ length: 5 }, (_, i) => addDays(state.weekStart, i));
   const startISO = toISO(days[0]), endISO = toISO(days[6]);
   const weekRdvs = await DB.listRendezvousRange(startISO, endISO);
   const byDate = {};
@@ -379,19 +464,58 @@ async function optimizeDay(dateISO) {
     toast("Localisation du domicile…");
     const coords = await getDomicileCoords();
     if (!coords) { toast("Géocodage du domicile impossible (hors ligne ?)"); return; }
-    runOptimize(dateISO, coords);
+    openOrderConstraintsSheet(dateISO, coords);
   };
   document.getElementById("opt-gps").onclick = async () => {
     closeSheet();
     toast("Localisation en cours…");
     const coords = await getCurrentPosition();
     if (!coords) { toast("Localisation indisponible"); return; }
-    runOptimize(dateISO, coords);
+    openOrderConstraintsSheet(dateISO, coords);
   };
-  document.getElementById("opt-none").onclick = () => { closeSheet(); runOptimize(dateISO, null); };
+  document.getElementById("opt-none").onclick = () => { closeSheet(); openOrderConstraintsSheet(dateISO, null); };
 }
 
-async function runOptimize(dateISO, depart) {
+async function openOrderConstraintsSheet(dateISO, depart) {
+  const rdvs = (await DB.listRendezvous()).filter((r) => r.date === dateISO && r.statut !== "honore");
+  const clients = await DB.listClients();
+  const cmap = Object.fromEntries(clients.map((c) => [c.id, c]));
+  const options = rdvs.map((r) => ({ id: r.id, name: clientFullName(cmap[r.clientId]) || "Client" }));
+  const optionsHtml = options.map((o) => `<option value="${o.id}">${escapeHtml(o.name)}</option>`).join("");
+
+  openSheet(`
+    <h2>Ordre de la tournée</h2>
+    <p style="color:var(--smoke);font-size:13px;margin:-6px 0 14px;">Facultatif : impose un client en premier et/ou en dernier — le reste sera optimisé automatiquement.</p>
+    <div class="form-row">
+      <label>Premier client</label>
+      <select id="f-force-first" style="width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:10px;font-size:15px;background:var(--surface);color:var(--ink);">
+        <option value="">Aucun (laisser optimiser)</option>
+        ${optionsHtml}
+      </select>
+    </div>
+    <div class="form-row">
+      <label>Dernier client</label>
+      <select id="f-force-last" style="width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:10px;font-size:15px;background:var(--surface);color:var(--ink);">
+        <option value="">Aucun (laisser optimiser)</option>
+        ${optionsHtml}
+      </select>
+    </div>
+    <div class="sheet-actions">
+      <button class="btn-secondary" id="cancel-btn">Annuler</button>
+      <button class="btn-primary" id="go-btn">Calculer</button>
+    </div>
+  `);
+  document.getElementById("cancel-btn").onclick = closeSheet;
+  document.getElementById("go-btn").onclick = () => {
+    const forceFirst = document.getElementById("f-force-first").value || null;
+    const forceLast = document.getElementById("f-force-last").value || null;
+    if (forceFirst && forceFirst === forceLast) { toast("Choisis deux clients différents pour le premier et le dernier"); return; }
+    closeSheet();
+    runOptimize(dateISO, depart, forceFirst, forceLast);
+  };
+}
+
+async function runOptimize(dateISO, depart, forceFirstId, forceLastId) {
   const rdvs = (await DB.listRendezvous()).filter((r) => r.date === dateISO && r.statut !== "honore");
   const clients = await DB.listClients();
   const cmap = Object.fromEntries(clients.map((c) => [c.id, c]));
@@ -411,7 +535,7 @@ async function runOptimize(dateISO, depart) {
   const roundtrip = !!(await DB.getParam("retourDepart", false));
 
   toast("Calcul de l'itinéraire…");
-  const result = await optimizeTrip(points, depart, roundtrip);
+  const result = await optimizeTripConstrained(points, depart, roundtrip, forceFirstId, forceLastId);
 
   for (const rdvId of result.order) {
     const r = rdvs.find((x) => x.id === rdvId);
@@ -496,7 +620,7 @@ async function renderFiche() {
 
   const wazeUrl = c.adresse ? `https://waze.com/ul?q=${encodeURIComponent(c.adresse)}&navigate=yes` : null;
   const telHref = c.telephone ? `tel:${c.telephone.replace(/\s+/g, "")}` : null;
-  const smsBody = encodeURIComponent(`Bonjour ${civilLabel(c) ? civilLabel(c) + " " : ""}${c.nom}, je suis en route pour notre rendez-vous. À tout de suite.`);
+  const smsBody = encodeURIComponent("Bonjour, ETS Gallay, je suis en route pour notre rendez-vous. À tout de suite.");
   const smsHref = c.telephone ? `sms:${c.telephone.replace(/\s+/g, "")}?body=${smsBody}` : null;
 
   root.innerHTML = `
@@ -529,7 +653,6 @@ async function renderFiche() {
 
     <div class="info-block">
       <h3>Installation</h3>
-      <div class="info-row"><span class="k">Matériel</span><span class="v">${escapeHtml(labelMateriel(c.materielType) || "—")}</span></div>
       <div class="info-row"><span class="k">Marque</span><span class="v">${escapeHtml(c.marque || "—")}</span></div>
       <div class="info-row"><span class="k">Modèle</span><span class="v">${escapeHtml(c.modele || "—")}</span></div>
       ${c.infosComplementaires ? `<div class="info-row"><span class="k">Infos</span><span class="v">${escapeHtml(c.infosComplementaires)}</span></div>` : ""}
@@ -539,6 +662,7 @@ async function renderFiche() {
       <h3>Coordonnées</h3>
       <div class="info-row"><span class="k">Téléphone</span><span class="v">${escapeHtml(c.telephone || "—")}</span></div>
       ${c.email ? `<div class="info-row"><span class="k">E-mail</span><span class="v">${escapeHtml(c.email)}</span></div>` : ""}
+      <div class="info-row"><span class="k">Nouveau client</span><span class="v">${nouveauClientLabel(c)}</span></div>
     </div>
 
     ${c.commentaires ? `<div class="info-block"><h3>Commentaires</h3><p class="comment-text">${escapeHtml(c.commentaires)}</p></div>` : ""}
@@ -616,11 +740,6 @@ async function renderFiche() {
       render();
     };
   });
-}
-
-function labelMateriel(v) {
-  const map = { bois: "Poêle à bois", granules: "Poêle à granulés", autre: "Autre" };
-  return map[v] || v;
 }
 
 // ---------- Paramètres ----------
@@ -915,24 +1034,16 @@ async function openClientForm(existing, onSaved) {
       <div class="form-row"><label>Prénom (facultatif)</label><input type="text" id="f-prenom" value="${escapeAttr(c.prenom)}" /></div>
     </div>
     <div class="form-row">
-      <label>Civilité</label>
+      <label>Nouveau client ?</label>
       <div class="pill-choice" id="f-civilite">
-        <button type="button" data-val="" class="${!c.civilite ? "active period-active" : ""}">Non précisé</button>
-        <button type="button" data-val="homme" class="${c.civilite === "homme" ? "active period-active" : ""}">Homme</button>
-        <button type="button" data-val="femme" class="${c.civilite === "femme" ? "active period-active" : ""}">Femme</button>
+        <button type="button" data-val="" class="${!c.nouveauClient ? "active period-active" : ""}">Non précisé</button>
+        <button type="button" data-val="oui" class="${c.nouveauClient === "oui" ? "active period-active" : ""}">Oui</button>
+        <button type="button" data-val="non" class="${c.nouveauClient === "non" ? "active period-active" : ""}">Non</button>
       </div>
     </div>
     <div class="form-row"><label>Téléphone</label><input type="tel" id="f-tel" value="${escapeAttr(c.telephone)}" /></div>
     <div class="form-row"><label>E-mail (facultatif)</label><input type="email" id="f-email" value="${escapeAttr(c.email)}" /></div>
     <div class="form-row"><label>Adresse</label><input type="text" id="f-adresse" value="${escapeAttr(c.adresse)}" /></div>
-    <div class="form-row">
-      <label>Type de matériel</label>
-      <select id="f-materiel">
-        <option value="bois" ${c.materielType === "bois" ? "selected" : ""}>Poêle à bois</option>
-        <option value="granules" ${c.materielType === "granules" ? "selected" : ""}>Poêle à granulés</option>
-        <option value="autre" ${c.materielType === "autre" ? "selected" : ""}>Autre</option>
-      </select>
-    </div>
     <div class="form-row-2">
       <div class="form-row"><label>Marque</label><input type="text" id="f-marque" value="${escapeAttr(c.marque)}" /></div>
       <div class="form-row"><label>Modèle</label><input type="text" id="f-modele" value="${escapeAttr(c.modele)}" /></div>
@@ -946,7 +1057,7 @@ async function openClientForm(existing, onSaved) {
   `);
 
   document.getElementById("cancel-btn").onclick = closeSheet;
-  let selCivilite = c.civilite || "";
+  let selCivilite = c.nouveauClient || "";
   document.querySelectorAll("#f-civilite button").forEach((b) => {
     b.onclick = () => {
       selCivilite = b.dataset.val;
@@ -961,11 +1072,10 @@ async function openClientForm(existing, onSaved) {
     const client = {
       ...c,
       prenom, nom,
-      civilite: selCivilite,
+      nouveauClient: selCivilite,
       telephone: document.getElementById("f-tel").value.trim(),
       email: document.getElementById("f-email").value.trim(),
       adresse: document.getElementById("f-adresse").value.trim(),
-      materielType: document.getElementById("f-materiel").value,
       marque: document.getElementById("f-marque").value.trim(),
       modele: document.getElementById("f-modele").value.trim(),
       infosComplementaires: document.getElementById("f-infos").value.trim(),
@@ -1296,7 +1406,7 @@ async function openRdvForm(prefill = {}, existing) {
 async function openRdvConfirmSheet(item, client) {
   const addr = item.adresse || client.adresse || "";
   const smsBody = encodeURIComponent(
-    `Bonjour ${civilLabel(client) ? civilLabel(client) + " " : ""}${client.nom}, suite à votre appel je vous confirme la prise d'un rendez-vous pour un ${item.type === "entretien" ? "entretien" : "dépannage"}${addr ? " à l'adresse " + addr : ""} le ${fmtDateFullFR(item.date)}, bonne journée !`
+    `Bonjour, suite à votre appel je vous confirme la prise d'un rendez-vous pour un ${item.type === "entretien" ? "entretien" : "dépannage"}${addr ? " à l'adresse " + addr : ""} le ${fmtDateFullFR(item.date)}, bonne journée !`
   );
   const smsHref = client.telephone ? `sms:${client.telephone.replace(/\s+/g, "")}?body=${smsBody}` : null;
 
@@ -1319,7 +1429,7 @@ async function openRdvDetail(id) {
   const mapsUrl = addr ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(addr)}` : null;
   const wazeUrl = addr ? `https://waze.com/ul?q=${encodeURIComponent(addr)}&navigate=yes` : null;
   const telHref = client && client.telephone ? `tel:${client.telephone.replace(/\s+/g, "")}` : null;
-  const smsBody = client ? encodeURIComponent(`Bonjour ${civilLabel(client) ? civilLabel(client) + " " : ""}${client.nom}, je suis en route pour notre rendez-vous. À tout de suite.`) : "";
+  const smsBody = client ? encodeURIComponent("Bonjour, ETS Gallay, je suis en route pour notre rendez-vous. À tout de suite.") : "";
   const smsHref = client && client.telephone ? `sms:${client.telephone.replace(/\s+/g, "")}?body=${smsBody}` : null;
   const period = periodLabel(r.periode);
 
@@ -1496,3 +1606,4 @@ if ("serviceWorker" in navigator) {
 history.replaceState(historySnapshot(), "", "#accueil");
 render();
 maybeAutoCloudBackup();
+maybeFridayReminder();

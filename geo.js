@@ -96,3 +96,56 @@ async function optimizeTrip(points, startPoint, roundtrip) {
   if (roundtrip && startPoint) dist += haversineKm(prev.lat, prev.lon, startPoint.lat, startPoint.lon);
   return { order: ordered.map((p) => p.id), distanceKm: dist, durationMin: null, estimated: true };
 }
+
+// Variante avec premier et/ou dernier client imposés. OSRM ne permet de fixer que le tout
+// premier et le tout dernier point d'un trajet — on optimise donc librement le reste "au milieu",
+// puis on recolle les segments imposés autour, en estimant leur distance à vol d'oiseau.
+async function optimizeTripConstrained(points, startPoint, roundtrip, forceFirstId, forceLastId) {
+  const remaining = points.slice();
+  let forcedFirst = null, forcedLast = null;
+
+  if (forceFirstId) {
+    const idx = remaining.findIndex((p) => p.id === forceFirstId);
+    if (idx !== -1) forcedFirst = remaining.splice(idx, 1)[0];
+  }
+  if (forceLastId) {
+    const idx = remaining.findIndex((p) => p.id === forceLastId);
+    if (idx !== -1) forcedLast = remaining.splice(idx, 1)[0];
+  }
+
+  if (!forcedFirst && !forcedLast) {
+    return optimizeTrip(points, startPoint, roundtrip);
+  }
+
+  const anchor = forcedFirst || startPoint;
+  let middleResult;
+  if (remaining.length === 0) {
+    middleResult = { order: [], distanceKm: 0, durationMin: 0, estimated: false };
+  } else if (remaining.length === 1) {
+    const d = anchor ? haversineKm(anchor.lat, anchor.lon, remaining[0].lat, remaining[0].lon) : 0;
+    middleResult = { order: [remaining[0].id], distanceKm: d, durationMin: null, estimated: true };
+  } else {
+    middleResult = await optimizeTrip(remaining, anchor, false);
+  }
+
+  const order = [];
+  if (forcedFirst) order.push(forcedFirst.id);
+  order.push(...middleResult.order);
+  if (forcedLast) order.push(forcedLast.id);
+
+  const byId = Object.fromEntries(points.map((p) => [p.id, p]));
+  let dist = middleResult.distanceKm;
+  if (forcedFirst && startPoint) dist += haversineKm(startPoint.lat, startPoint.lon, forcedFirst.lat, forcedFirst.lon);
+  if (forcedLast) {
+    const prevId = middleResult.order.length ? middleResult.order[middleResult.order.length - 1] : null;
+    const prevPoint = prevId ? byId[prevId] : (forcedFirst || startPoint);
+    if (prevPoint) dist += haversineKm(prevPoint.lat, prevPoint.lon, forcedLast.lat, forcedLast.lon);
+  }
+  if (roundtrip && startPoint) {
+    const lastId = forcedLast ? forcedLast.id : (middleResult.order.length ? middleResult.order[middleResult.order.length - 1] : (forcedFirst ? forcedFirst.id : null));
+    const lastPoint = lastId ? byId[lastId] : null;
+    if (lastPoint) dist += haversineKm(lastPoint.lat, lastPoint.lon, startPoint.lat, startPoint.lon);
+  }
+
+  return { order, distanceKm: dist, durationMin: middleResult.durationMin, estimated: true };
+}

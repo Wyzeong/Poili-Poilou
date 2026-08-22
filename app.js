@@ -2,7 +2,7 @@
    Vues : Accueil / Agenda / Clients / Fiche client / Paramètres
    Toute la donnée passe par DB (db.js → IndexedDB). */
 
-const APP_VERSION = "1.10.2"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
+const APP_VERSION = "1.11.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
 
 const JOURS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
 const JOURS_COURT = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
@@ -185,10 +185,10 @@ async function renderAccueil() {
         </span>
         <svg class="hb-chev" viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </button>
-      <button class="home-btn" data-nav="recap-ets">
+      <button class="home-btn" data-nav="recap-honores">
         <span class="hb-icon"><svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M4 4h16v12H7l-3 3V4zm2 3h12v2H6V7zm0 4h8v2H6v-2z"/></svg></span>
         <span class="hb-text">
-          <span class="hb-title">Récapitulatif ETS Gallay</span>
+          <span class="hb-title">Récapitulatif RDV honorés</span>
           <span class="hb-sub">Envoyer le résumé de la semaine</span>
         </span>
         <svg class="hb-chev" viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -200,12 +200,10 @@ async function renderAccueil() {
   root.querySelector('[data-nav="clients"]').onclick = () => navigate("clients");
   root.querySelector('[data-nav="reglages"]').onclick = () => navigate("reglages");
   root.querySelector('[data-nav="rdv-new"]').onclick = () => openRdvForm();
-  root.querySelector('[data-nav="recap-ets"]').onclick = () => openRecapEtsGallay();
+  root.querySelector('[data-nav="recap-honores"]').onclick = () => openRecapHonores();
 }
 
-// ---------- Récapitulatif ETS Gallay (facturation) ----------
-const ETS_GALLAY_EMAIL = "etsgallay@gmail.com";
-
+// ---------- Récapitulatif RDV honorés (facturation) ----------
 async function buildRecapData(startISO, endISO) {
   const rdvs = (await DB.listRendezvous())
     .filter((r) => r.statut === "honore" && r.date >= startISO && r.date <= endISO)
@@ -247,7 +245,14 @@ function currentRecapRange() {
   return { startISO: toISO(monday), endISO };
 }
 
-async function openRecapEtsGallay() {
+async function openRecapHonores() {
+  const recapEmail = await DB.getParam("recapEmail", "");
+  if (!recapEmail) {
+    toast("Renseigne d'abord une adresse e-mail dans Paramètres");
+    navigate("reglages");
+    return;
+  }
+
   const { startISO, endISO } = currentRecapRange();
   const { nouveaux, habituels } = await buildRecapData(startISO, endISO);
 
@@ -266,7 +271,7 @@ async function openRecapEtsGallay() {
   body += "Merci,";
 
   const subject = `Récapitulatif interventions — semaine du ${fmtDateFR(startISO)} au ${fmtDateFR(endISO)}`;
-  window.location.href = `mailto:${ETS_GALLAY_EMAIL}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+  window.location.href = `mailto:${recapEmail}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 }
 
 async function maybeFridayReminder() {
@@ -276,7 +281,7 @@ async function maybeFridayReminder() {
   const lastShown = await DB.getParam("lastFridayReminderDate", null);
   if (lastShown === todayISO) return;
   await DB.setParam("lastFridayReminderDate", todayISO);
-  toast("N'oublie pas d'envoyer le récapitulatif ETS Gallay aujourd'hui !");
+  toast("N'oublie pas d'envoyer le récapitulatif des RDV honorés aujourd'hui !");
 }
 
 // ---------- Vue Agenda (colonnes semaine, façon Google Agenda) ----------
@@ -748,6 +753,7 @@ async function renderFiche() {
 async function renderReglages() {
   const retourDepart = await DB.getParam("retourDepart", false);
   const clientsSansGeo = (await DB.listClients()).filter((c) => c.adresse && c.lat == null).length;
+  const recapEmail = await DB.getParam("recapEmail", "");
 
   root.innerHTML = `
     <h2 class="view-heading">Paramètres</h2>
@@ -778,6 +784,15 @@ async function renderReglages() {
     </div>
 
     <div class="info-block">
+      <h3>Récapitulatif RDV honorés</h3>
+      <div class="form-row" style="margin-bottom:8px;">
+        <label for="recap-email-input">Adresse e-mail du destinataire</label>
+        <input type="email" id="recap-email-input" value="${escapeHtml(recapEmail)}" placeholder="exemple@email.com" />
+      </div>
+      <button class="btn-primary" id="save-recap-email" style="width:100%;">Enregistrer</button>
+    </div>
+
+    <div class="info-block">
       <h3>Sauvegarde (Google Drive)</h3>
       <div id="drive-status"></div>
     </div>
@@ -787,6 +802,11 @@ async function renderReglages() {
       <div id="calendar-status"></div>
     </div>
   `;
+
+  document.getElementById("save-recap-email").onclick = async () => {
+    await DB.setParam("recapEmail", document.getElementById("recap-email-input").value.trim());
+    toast("Adresse enregistrée");
+  };
 
   document.querySelectorAll("#f-retour button").forEach((b) => {
     b.onclick = async () => {

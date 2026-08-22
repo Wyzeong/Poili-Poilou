@@ -1,4 +1,4 @@
-const CACHE_NAME = "tournees-poeles-v1.10.2";
+const CACHE_NAME = "tournees-poeles-v1.11.0";
 const APP_SHELL = [
   "./",
   "./index.html",

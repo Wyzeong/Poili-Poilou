@@ -2,7 +2,7 @@
    Vues : Accueil / Agenda / Clients / Fiche client / Paramètres
    Toute la donnée passe par DB (db.js → IndexedDB). */
 
-const APP_VERSION = "1.17.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
+const APP_VERSION = "1.18.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
 
 const JOURS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
 const JOURS_COURT = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
@@ -719,6 +719,13 @@ async function renderFiche() {
     ${c.commentaires ? `<div class="info-block"><h3>Commentaires</h3><p class="comment-text">${escapeHtml(c.commentaires)}</p></div>` : ""}
 
     <div class="info-block">
+      <h3>Photos</h3>
+      <div id="client-photos-grid">${photoGridHtml(c.photos, true)}</div>
+      <input type="file" accept="image/*" capture="environment" multiple id="client-photo-input" hidden />
+      <button class="btn-secondary" id="client-photo-add-btn" style="width:100%;margin-top:8px;">+ Ajouter une photo</button>
+    </div>
+
+    <div class="info-block">
       <h3>Rendez-vous à venir</h3>
       ${upcomingRdv.length === 0 ? '<p style="color:var(--smoke);font-size:13.5px;margin:4px 0;">Aucun rendez-vous planifié.</p>' :
         upcomingRdv.map((r) => `
@@ -741,6 +748,7 @@ async function renderFiche() {
                 <span class="hist-date">${fmtDateFR(h.date)}</span>
               </div>
               ${h.description ? `<p class="hist-desc">${escapeHtml(h.description)}</p>` : ""}
+              ${photoGridHtml(h.photos, false)}
               <div class="hist-actions">
                 <button class="link-btn" data-edit-hist="${h.id}">Modifier</button>
                 <button class="link-btn" data-del-hist="${h.id}">Supprimer</button>
@@ -758,6 +766,30 @@ async function renderFiche() {
   document.getElementById("qa-rdv").onclick = () => openRdvForm({ clientId: c.id });
   document.getElementById("edit-client-btn").onclick = () => openClientForm(c);
   document.getElementById("del-client-btn").onclick = () => confirmDeleteClient(c);
+
+  document.getElementById("client-photo-add-btn").onclick = () => document.getElementById("client-photo-input").click();
+  document.getElementById("client-photo-input").onchange = async (e) => {
+    const newPhotos = await resizeImageFilesToDataURLs(e.target.files);
+    if (newPhotos.length === 0) return;
+    const fresh = await DB.getClient(c.id);
+    if (fresh) {
+      fresh.photos = [...(fresh.photos || []), ...newPhotos];
+      await DB.saveClient(fresh);
+      toast("Photo ajoutée ✓");
+      render();
+    }
+  };
+  document.querySelectorAll("#client-photos-grid .photo-remove").forEach((btn) => {
+    btn.onclick = async () => {
+      const idx = parseInt(btn.dataset.idx, 10);
+      const fresh = await DB.getClient(c.id);
+      if (fresh) {
+        fresh.photos = (fresh.photos || []).filter((_, i) => i !== idx);
+        await DB.saveClient(fresh);
+        render();
+      }
+    };
+  });
 
   const retryBtn = document.getElementById("retry-geo-btn");
   if (retryBtn) {
@@ -1063,11 +1095,29 @@ async function renderCalendarStatus() {
 const IMPORT_RANGE_START = "2024-01-01T00:00:00Z";
 const IMPORT_RANGE_END = "2026-01-01T00:00:00Z"; // couvre toute l'année 2025
 
+// Mots-clés d'événements personnels/non-clients à exclure de l'import (rendez-vous
+// médicaux, loisirs, administratif...). Comparaison insensible aux accents et à la casse.
+const IMPORT_EXCLUDED_KEYWORDS = [
+  "anniversaire", "cardiologue", "docteur", "coiffeur", "coiffeuse", "comptabilite",
+  "comportementaliste", "vacance", "examen", "sport", "revision", "renault",
+  "reunion", "rdv", "petel", "kine",
+];
+
+function normalizeForMatch(str) {
+  return (str || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+}
+
+function isExcludedCalendarEvent(text) {
+  const norm = normalizeForMatch(text);
+  return IMPORT_EXCLUDED_KEYWORDS.some((kw) => norm.includes(kw));
+}
+
 function extractCandidateFromEvent(ev) {
   const title = (ev.summary || "").trim();
   const desc = (ev.description || "").trim();
   const full = `${title}\n${desc}`;
   if (!title) return null;
+  if (isExcludedCalendarEvent(full)) return null;
 
   const phoneMatch = full.match(/0[1-9](?:[\s.-]?\d{2}){4}/);
   const emailMatch = full.match(/[\w.+-]+@[\w-]+\.[a-zA-Z]{2,}/);
@@ -1481,6 +1531,9 @@ async function openClientForm(existing, onSaved) {
     };
     const addressChanged = !existing || existing.adresse !== client.adresse;
     if (addressChanged) { client.lat = null; client.lon = null; client.geocodeStatus = null; }
+    // "Client importé" n'est qu'un centre de tri temporaire : dès que la fiche est
+    // modifiée (donc vérifiée), elle rejoint la liste normale des clients.
+    if (existing && existing.source === "import") client.source = null;
     const saved = await DB.saveClient(client);
     closeSheet();
 
@@ -1893,6 +1946,7 @@ async function openHonoreForm(r, client) {
   let virement = (r.paiement && r.paiement.mode === "virement")
     ? { montant: r.paiement.montant || "", commentaire: r.paiement.commentaire || "" }
     : { montant: "", commentaire: "" };
+  let honorePhotos = [];
 
   openSheet(`
     <h2>RDV honoré</h2>
@@ -1906,6 +1960,12 @@ async function openHonoreForm(r, client) {
       </div>
     </div>
     <div id="paiement-details"></div>
+    <div class="form-row">
+      <label>Photos (facultatif)</label>
+      <div id="honore-photos-grid"></div>
+      <input type="file" accept="image/*" capture="environment" multiple id="honore-photo-input" hidden />
+      <button type="button" class="btn-secondary" id="honore-photo-add-btn" style="width:100%;margin-top:8px;">+ Ajouter une photo</button>
+    </div>
     <div class="sheet-actions">
       <button class="btn-secondary" id="cancel-btn">Annuler</button>
       <button class="btn-primary" id="confirm-btn">Valider</button>
@@ -1969,6 +2029,22 @@ async function openHonoreForm(r, client) {
 
   renderDetails();
 
+  function renderHonorePhotosGrid() {
+    document.getElementById("honore-photos-grid").innerHTML = photoGridHtml(honorePhotos, true);
+    document.querySelectorAll("#honore-photos-grid .photo-remove").forEach((btn) => {
+      btn.onclick = () => {
+        honorePhotos = honorePhotos.filter((_, i) => i !== parseInt(btn.dataset.idx, 10));
+        renderHonorePhotosGrid();
+      };
+    });
+  }
+  document.getElementById("honore-photo-add-btn").onclick = () => document.getElementById("honore-photo-input").click();
+  document.getElementById("honore-photo-input").onchange = async (e) => {
+    const newPhotos = await resizeImageFilesToDataURLs(e.target.files);
+    honorePhotos = [...honorePhotos, ...newPhotos];
+    renderHonorePhotosGrid();
+  };
+
   document.querySelectorAll("#f-paiement-mode button").forEach((b) => {
     b.onclick = () => {
       if (mode === "cheque") readChequesFromDOM(); else readVirementFromDOM();
@@ -1995,6 +2071,7 @@ async function openHonoreForm(r, client) {
       date: r.date,
       type: r.type,
       description: formatPaiementLines(paiement).join(" / "),
+      photos: honorePhotos,
     });
     r.statut = "honore";
     r.paiement = paiement;
@@ -2120,6 +2197,55 @@ function toast(msg) {
   el.hidden = false;
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => { el.hidden = true; }, 2400);
+}
+
+// ---------- Photos (redimensionnement avant stockage) ----------
+// Les photos sont stockées en base64 directement sur les fiches client/intervention,
+// ce qui les inclut automatiquement dans la sauvegarde Drive comme le reste des
+// données — mais ça veut dire qu'il faut les compresser en amont pour ne pas
+// alourdir démesurément les sauvegardes.
+function resizeImageToDataURL(file, maxDim = 1280, quality = 0.72) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Lecture du fichier impossible"));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error("Image invalide"));
+      img.onload = () => {
+        let { width, height } = img;
+        if (width > maxDim || height > maxDim) {
+          if (width > height) { height = Math.round((height * maxDim) / width); width = maxDim; }
+          else { width = Math.round((width * maxDim) / height); height = maxDim; }
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        canvas.getContext("2d").drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL("image/jpeg", quality));
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+async function resizeImageFilesToDataURLs(fileList) {
+  const files = Array.from(fileList || []);
+  const results = [];
+  for (const f of files) {
+    try { results.push(await resizeImageToDataURL(f)); } catch (e) { /* fichier ignoré si illisible */ }
+  }
+  return results;
+}
+
+function photoGridHtml(photos, removable) {
+  if (!photos || photos.length === 0) return "";
+  return `<div class="photo-grid">${photos.map((src, i) => `
+    <div class="photo-thumb">
+      <img src="${src}" alt="" />
+      ${removable ? `<button type="button" class="photo-remove" data-idx="${i}" aria-label="Supprimer">×</button>` : ""}
+    </div>
+  `).join("")}</div>`;
 }
 
 // ---------- Échappement HTML ----------

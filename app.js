@@ -2,7 +2,7 @@
    Vues : Accueil / Agenda / Clients / Fiche client / Paramètres
    Toute la donnée passe par DB (db.js → IndexedDB). */
 
-const APP_VERSION = "1.16.2"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
+const APP_VERSION = "1.17.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
 
 const JOURS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
 const JOURS_COURT = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
@@ -15,6 +15,7 @@ const state = {
   weekStart: startOfWeek(new Date()),
   clientId: null,
   clientSearch: "",
+  clientFilter: "all",
   agendaSearch: "",
 };
 
@@ -587,17 +588,41 @@ async function runOptimize(dateISO, depart, forceFirstId, forceLastId) {
 }
 
 // ---------- Vue Clients ----------
+async function getFilteredClients() {
+  let clients = await DB.searchClients(state.clientSearch);
+  if (state.clientFilter === "imported") clients = clients.filter((c) => c.source === "import");
+  return clients;
+}
+
 async function renderClients() {
-  const clients = await DB.searchClients(state.clientSearch);
-  let html = `<h2 class="view-heading">Clients</h2><input type="text" class="search-bar" id="client-search" placeholder="Rechercher un client (nom, adresse, téléphone)" value="${escapeHtml(state.clientSearch)}" />`;
+  const allClients = await DB.listClients();
+  const importedCount = allClients.filter((c) => c.source === "import").length;
+  const clients = await getFilteredClients();
+
+  let html = `<h2 class="view-heading">Clients</h2>`;
+  if (importedCount > 0) {
+    html += `
+      <div class="pill-choice" id="client-filter-tabs" style="margin-bottom:10px;">
+        <button type="button" data-val="all" class="${state.clientFilter !== "imported" ? "active period-active" : ""}">Tous</button>
+        <button type="button" data-val="imported" class="${state.clientFilter === "imported" ? "active period-active" : ""}">Clients importés (${importedCount})</button>
+      </div>
+    `;
+  }
+  html += `<input type="text" class="search-bar" id="client-search" placeholder="Rechercher un client (nom, adresse, téléphone)" value="${escapeHtml(state.clientSearch)}" />`;
 
   if (clients.length === 0) {
-    html += `<div class="empty-state"><span class="emoji">🔍</span>${state.clientSearch ? "Aucun client trouvé." : "Aucun client pour l'instant.<br>Ajoute ton premier client avec le bouton +."}</div>`;
+    html += `<div class="empty-state"><span class="emoji">🔍</span>${state.clientSearch ? "Aucun client trouvé." : (state.clientFilter === "imported" ? "Aucun client importé pour l'instant." : "Aucun client pour l'instant.<br>Ajoute ton premier client avec le bouton +.")}</div>`;
   } else {
     html += clients.map((c) => clientRowHtml(c)).join("");
   }
 
   root.innerHTML = html;
+  const filterTabs = document.getElementById("client-filter-tabs");
+  if (filterTabs) {
+    filterTabs.querySelectorAll("button").forEach((b) => {
+      b.onclick = () => { state.clientFilter = b.dataset.val; renderClients(); };
+    });
+  }
   const input = document.getElementById("client-search");
   input.oninput = () => { state.clientSearch = input.value; renderClientsListOnly(); };
   root.querySelectorAll("[data-client]").forEach((el) => {
@@ -619,7 +644,7 @@ function clientRowHtml(c) {
 }
 
 async function renderClientsListOnly() {
-  const clients = await DB.searchClients(state.clientSearch);
+  const clients = await getFilteredClients();
   const container = document.createElement("div");
   if (clients.length === 0) {
     container.innerHTML = `<div class="empty-state"><span class="emoji">🔍</span>${state.clientSearch ? "Aucun client trouvé." : "Aucun client pour l'instant."}</div>`;
@@ -1137,7 +1162,7 @@ async function renderImport() {
   const clients = await DB.listClients();
   let html = `
     <h2 class="view-heading">Import depuis Google Agenda</h2>
-    <p style="font-size:12.5px;color:var(--smoke);margin:-10px 0 14px;">Analyse du ${scanAt ? fmtDateTimeFR(scanAt) : ""} — ${candidates.length} personne(s) détectée(s). Vérifie et corrige avant de créer les fiches.</p>
+    <p style="font-size:12.5px;color:var(--smoke);margin:-10px 0 14px;">Analyse du ${scanAt ? fmtDateTimeFR(scanAt) : ""} — ${candidates.length} personne(s) détectée(s). Vérifie et corrige avant de créer les fiches. Tu peux traiter les fiches une par une, ou en cocher plusieurs pour les créer d'un coup.</p>
     <div class="sheet-actions" style="margin-bottom:14px;">
       <button class="btn-secondary" id="rescan-btn">Relancer l'analyse</button>
       <button class="btn-secondary" id="select-all-btn">Tout cocher</button>
@@ -1160,19 +1185,60 @@ async function renderImport() {
         </div>
         <div class="form-row" style="margin-bottom:8px;"><label>Adresse</label><input type="text" class="cand-adresse" value="${escapeAttr(c.adresse)}" /></div>
         <p class="near-hint" style="margin:0 0 8px;">Vu ${c.occurrences.length} fois${period ? " · " + period : ""}</p>
-        <div style="display:flex;align-items:center;justify-content:space-between;">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
           <label style="display:flex;align-items:center;gap:8px;font-size:13.5px;">
             <input type="checkbox" class="cand-select" ${dup ? "" : "checked"} />
-            Créer cette fiche
+            Sélectionner
           </label>
-          <button type="button" class="link-btn cand-dismiss">Ignorer</button>
+          <div style="display:flex;gap:14px;align-items:center;">
+            <button type="button" class="link-btn cand-dismiss">Ignorer</button>
+            <button type="button" class="btn-secondary cand-create-one" style="padding:8px 14px;">Créer cette fiche</button>
+          </div>
         </div>
       </div>
     `;
   }).join("");
 
+  async function createFromRow(row) {
+    const nom = row.querySelector(".cand-nom").value.trim();
+    if (!nom) { toast("Le nom est requis"); return false; }
+    const client = {
+      nom,
+      prenom: "",
+      telephone: row.querySelector(".cand-tel").value.trim(),
+      adresse: row.querySelector(".cand-adresse").value.trim(),
+      nouveauClient: "non",
+      source: "import",
+    };
+    const saved = await DB.saveClient(client);
+    if (client.adresse) {
+      geocodeAddress(client.adresse).then(async (coords) => {
+        if (!coords) return;
+        const fresh = await DB.getClient(saved.id);
+        if (fresh) { fresh.lat = coords.lat; fresh.lon = coords.lon; fresh.geocodeStatus = "ok"; await DB.saveClient(fresh); }
+      });
+    }
+    return true;
+  }
+
+  async function removeCandidateFromStorage(candId) {
+    const current = (await DB.getParam("importCandidates", [])) || [];
+    await DB.setParam("importCandidates", current.filter((x) => x.id !== candId));
+  }
+
   listEl.querySelectorAll("[data-cand-id]").forEach((row) => {
-    row.querySelector(".cand-dismiss").onclick = () => row.remove();
+    const candId = row.dataset.candId;
+    row.querySelector(".cand-dismiss").onclick = async () => {
+      await removeCandidateFromStorage(candId);
+      row.remove();
+    };
+    row.querySelector(".cand-create-one").onclick = async () => {
+      const ok = await createFromRow(row);
+      if (!ok) return;
+      await removeCandidateFromStorage(candId);
+      toast("Fiche créée ✓");
+      row.remove();
+    };
   });
 
   document.getElementById("select-all-btn").onclick = () => {
@@ -1196,27 +1262,9 @@ async function renderImport() {
     for (const row of rows) {
       const checkbox = row.querySelector(".cand-select");
       if (!checkbox.checked) continue;
-      const nom = row.querySelector(".cand-nom").value.trim();
-      if (!nom) continue;
-      const client = {
-        nom,
-        prenom: "",
-        telephone: row.querySelector(".cand-tel").value.trim(),
-        adresse: row.querySelector(".cand-adresse").value.trim(),
-        nouveauClient: "non",
-      };
-      const saved = await DB.saveClient(client);
-      created++;
-      if (client.adresse) {
-        geocodeAddress(client.adresse).then(async (coords) => {
-          if (!coords) return;
-          const fresh = await DB.getClient(saved.id);
-          if (fresh) { fresh.lat = coords.lat; fresh.lon = coords.lon; fresh.geocodeStatus = "ok"; await DB.saveClient(fresh); }
-        });
-      }
+      const ok = await createFromRow(row);
+      if (ok) { created++; await removeCandidateFromStorage(row.dataset.candId); }
     }
-    await DB.setParam("importCandidates", null);
-    await DB.setParam("importScanAt", null);
     toast(`${created} fiche(s) créée(s) ✓`);
     navigate("clients");
   };

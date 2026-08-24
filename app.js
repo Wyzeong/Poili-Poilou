@@ -2,7 +2,7 @@
    Vues : Accueil / Agenda / Clients / Fiche client / Paramètres
    Toute la donnée passe par DB (db.js → IndexedDB). */
 
-const APP_VERSION = "1.18.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
+const APP_VERSION = "1.19.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
 
 const JOURS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
 const JOURS_COURT = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
@@ -607,6 +607,9 @@ async function renderClients() {
         <button type="button" data-val="imported" class="${state.clientFilter === "imported" ? "active period-active" : ""}">Clients importés (${importedCount})</button>
       </div>
     `;
+    if (state.clientFilter === "imported") {
+      html += `<button class="btn-danger" id="delete-all-imported-btn" style="width:100%;margin-bottom:10px;">Supprimer tous les clients importés (${importedCount})</button>`;
+    }
   }
   html += `<input type="text" class="search-bar" id="client-search" placeholder="Rechercher un client (nom, adresse, téléphone)" value="${escapeHtml(state.clientSearch)}" />`;
 
@@ -623,11 +626,37 @@ async function renderClients() {
       b.onclick = () => { state.clientFilter = b.dataset.val; renderClients(); };
     });
   }
+  const deleteAllBtn = document.getElementById("delete-all-imported-btn");
+  if (deleteAllBtn) deleteAllBtn.onclick = () => confirmDeleteAllImported(importedCount);
   const input = document.getElementById("client-search");
   input.oninput = () => { state.clientSearch = input.value; renderClientsListOnly(); };
   root.querySelectorAll("[data-client]").forEach((el) => {
     el.onclick = () => navigate("fiche", el.dataset.client);
   });
+}
+
+async function confirmDeleteAllImported(count) {
+  openSheet(`
+    <h2>Supprimer les ${count} clients importés ?</h2>
+    <p style="color:var(--smoke);font-size:14px;">Cette action supprime définitivement toutes les fiches encore marquées "Client importé" (jamais modifiées depuis leur création), ainsi que leur éventuel historique. Les clients déjà vérifiés et modifiés ne sont pas concernés.</p>
+    <div class="sheet-actions">
+      <button class="btn-secondary" id="cancel-btn">Annuler</button>
+      <button class="btn-danger" id="confirm-btn">Supprimer</button>
+    </div>
+  `);
+  document.getElementById("cancel-btn").onclick = closeSheet;
+  document.getElementById("confirm-btn").onclick = async () => {
+    const toDelete = (await DB.listClients()).filter((c) => c.source === "import");
+    for (const c of toDelete) {
+      const hist = await DB.listInterventionsForClient(c.id);
+      for (const h of hist) await DB.deleteIntervention(h.id);
+      await DB.deleteClient(c.id);
+    }
+    closeSheet();
+    toast(`${toDelete.length} client(s) importé(s) supprimé(s)`);
+    state.clientFilter = "all";
+    render();
+  };
 }
 
 function clientRowHtml(c) {
@@ -1412,20 +1441,53 @@ async function openBackupPicker() {
 
 async function confirmCloudImport(fileId, label) {
   openSheet(`
-    <h2>Importer cette sauvegarde ?</h2>
+    <h2>Importer cette sauvegarde</h2>
+    <p style="color:var(--smoke);font-size:14px;margin:-6px 0 14px;">${escapeHtml(label || "")}</p>
+    <button class="choice-tile" id="opt-merge">
+      <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z"/></svg>
+      <span>Ajouter à mes données actuelles<span class="sub">Complète et met à jour, ne supprime rien</span></span>
+    </button>
+    <button class="choice-tile" id="opt-snapshot">
+      <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 5V2L8 6l4 4V7a5 5 0 1 1-5 5H5a7 7 0 1 0 7-7z"/></svg>
+      <span>Restaurer comme instantané<span class="sub">Remplace tout : efface d'abord toutes les données actuelles</span></span>
+    </button>
+    <div class="sheet-actions">
+      <button class="btn-secondary" id="cancel-btn" style="width:100%;">Annuler</button>
+    </div>
+  `);
+  document.getElementById("cancel-btn").onclick = closeSheet;
+
+  document.getElementById("opt-merge").onclick = async () => {
+    closeSheet();
+    toast("Import en cours…");
+    const r = await runCloudImport(fileId);
+    toast(r.ok ? "Import terminé ✓" : "Échec de l'import : " + r.error);
+    render();
+  };
+
+  document.getElementById("opt-snapshot").onclick = () => confirmSnapshotRestore(fileId, label);
+}
+
+async function confirmSnapshotRestore(fileId, label) {
+  openSheet(`
+    <h2>⚠️ Remplacer toutes les données ?</h2>
     <p style="color:var(--smoke);font-size:14px;margin:-6px 0 4px;">${escapeHtml(label || "")}</p>
-    <p style="color:var(--smoke);font-size:14px;">Cela va ajouter ou mettre à jour tes clients, rendez-vous et interventions locaux avec le contenu de cette sauvegarde. Rien ne sera supprimé localement.</p>
+    <p style="color:var(--danger);font-size:14px;">Tous les clients, rendez-vous et interventions actuellement dans l'appli seront définitivement supprimés, puis remplacés uniquement par le contenu de cette sauvegarde. Cette action est irréversible (sauf à réimporter une sauvegarde plus récente ensuite).</p>
     <div class="sheet-actions">
       <button class="btn-secondary" id="cancel-btn">Annuler</button>
-      <button class="btn-primary" id="confirm-btn">Importer</button>
+      <button class="btn-danger" id="confirm-btn">Tout remplacer</button>
     </div>
   `);
   document.getElementById("cancel-btn").onclick = closeSheet;
   document.getElementById("confirm-btn").onclick = async () => {
     closeSheet();
-    toast("Import en cours…");
+    toast("Suppression des données actuelles…");
+    await DB.clearClients();
+    await DB.clearRendezvous();
+    await DB.clearInterventions();
+    toast("Restauration en cours…");
     const r = await runCloudImport(fileId);
-    toast(r.ok ? "Import terminé ✓" : "Échec de l'import : " + r.error);
+    toast(r.ok ? "Instantané restauré ✓" : "Échec de la restauration : " + r.error);
     render();
   };
 }

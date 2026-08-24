@@ -79,6 +79,10 @@ const DB = {
     const store = await tx("clients", "readwrite");
     return reqToPromise(store.delete(id));
   },
+  async clearClients() {
+    const store = await tx("clients", "readwrite");
+    return reqToPromise(store.clear());
+  },
   async searchClients(query) {
     const all = await this.listClients();
     const q = (query || "").trim().toLowerCase();
@@ -106,6 +110,10 @@ const DB = {
     const store = await tx("interventions", "readwrite");
     return reqToPromise(store.delete(id));
   },
+  async clearInterventions() {
+    const store = await tx("interventions", "readwrite");
+    return reqToPromise(store.clear());
+  },
 
   // ---- Rendez-vous ----
   async listRendezvous() {
@@ -130,6 +138,10 @@ const DB = {
   async deleteRendezvous(id) {
     const store = await tx("rendezvous", "readwrite");
     return reqToPromise(store.delete(id));
+  },
+  async clearRendezvous() {
+    const store = await tx("rendezvous", "readwrite");
+    return reqToPromise(store.clear());
   },
 
   // ---- Paramètres (point de départ, etc.) ----

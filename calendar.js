@@ -66,3 +66,26 @@ async function calendarFetchEvents(timeMinISO, timeMaxISO) {
   const data = await res.json();
   return (data.items || []).map(parseCalendarEvent).filter((e) => e.date);
 }
+
+// Version avec pagination, pour récupérer un gros historique (ex : 2 années complètes).
+// Renvoie les événements bruts (avec summary/description), sans filtrage — l'appelant
+// se charge d'en extraire ce qui l'intéresse.
+async function calendarFetchEventsRaw(timeMinISO, timeMaxISO, onProgress) {
+  const token = await calendarGetToken();
+  let events = [];
+  let pageToken = null;
+  do {
+    const url = `https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=${encodeURIComponent(timeMinISO)}&timeMax=${encodeURIComponent(timeMaxISO)}&singleEvents=true&orderBy=startTime&maxResults=2500${pageToken ? "&pageToken=" + encodeURIComponent(pageToken) : ""}`;
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(`Erreur Google Agenda (${res.status}) ${text.slice(0, 120)}`);
+    }
+    const data = await res.json();
+    events = events.concat(data.items || []);
+    pageToken = data.nextPageToken || null;
+    if (onProgress) onProgress(events.length);
+  } while (pageToken);
+  return events;
+}
+

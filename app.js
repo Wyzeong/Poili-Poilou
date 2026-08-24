@@ -2,7 +2,7 @@
    Vues : Accueil / Agenda / Clients / Fiche client / Paramètres
    Toute la donnée passe par DB (db.js → IndexedDB). */
 
-const APP_VERSION = "1.14.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
+const APP_VERSION = "1.16.2"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
 
 const JOURS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
 const JOURS_COURT = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
@@ -140,6 +140,7 @@ async function render() {
   else if (state.view === "clients") await renderClients();
   else if (state.view === "fiche") await renderFiche();
   else if (state.view === "reglages") await renderReglages();
+  else if (state.view === "import") await renderImport();
 
   root.scrollTop = 0;
 }
@@ -224,7 +225,11 @@ async function buildRecapData(startISO, endISO) {
       paiement: r.paiement || null,
       compteRendu: r.compteRenduHonore || "", // repli pour les RDV honorés avant l'ajout du formulaire structuré
     };
-    if (c && c.nouveauClient === "oui") nouveaux.push(entry);
+    // Utilise le statut figé sur le rendez-vous au moment où il a été honoré (fiable
+    // même si la fiche client est passée à "existant" depuis). Pour les rendez-vous
+    // honorés avant l'ajout de ce figeage, on retombe sur l'état actuel de la fiche.
+    const etaitNouveau = r.etaitNouveauClient != null ? r.etaitNouveauClient : (c && c.nouveauClient === "oui");
+    if (etaitNouveau) nouveaux.push(entry);
     else habituels.push(entry);
   }
   return { nouveaux, habituels };
@@ -280,7 +285,7 @@ async function openRecapHonores() {
     body += "Nouveaux clients :\n\n" + nouveaux.map((e) => formatRecapEntry(e)).join("\n\n") + "\n\n";
   }
   if (habituels.length) {
-    body += "Clients habituels :\n\n" + habituels.map((e) => formatRecapEntry(e)).join("\n\n") + "\n\n";
+    body += "Clients existants :\n\n" + habituels.map((e) => formatRecapEntry(e)).join("\n\n") + "\n\n";
   }
   body += "Merci,";
 
@@ -907,9 +912,28 @@ function fmtDriveBackupLabel(f) {
   return f.createdTime ? fmtDateTimeFR(f.createdTime) : f.name;
 }
 
+// L'indicateur "connecté" peut, dans de rares cas, ne pas survivre à une fermeture
+// complète de l'appli (particularité connue des PWA Android autour des écrans de
+// connexion Google, qui basculent brièvement l'appli en arrière-plan). On se base
+// donc aussi sur une preuve indirecte — une synchronisation déjà réussie — pour ne
+// pas perdre le statut "connecté" même si l'indicateur lui-même a été perdu.
+async function isDriveConnected() {
+  const flag = await DB.getParam("driveConnected", false);
+  if (flag) return true;
+  const last = await DB.getParam("lastCloudBackupAt", null);
+  return !!last;
+}
+async function isCalendarConnected() {
+  const flag = await DB.getParam("calendarConnected", false);
+  if (flag) return true;
+  const last = await DB.getParam("lastCalendarSyncAt", null);
+  return !!last;
+}
+
 async function maybeAutoCloudBackup() {
-  const connected = await DB.getParam("driveConnected", false);
+  const connected = await isDriveConnected();
   if (!connected) return;
+  await DB.setParam("driveConnected", true); // auto-réparation si l'indicateur avait été perdu
   const last = await DB.getParam("lastCloudBackupAt", null);
   if (last && Date.now() - new Date(last).getTime() < CLOUD_BACKUP_INTERVAL_MS) return;
   await runCloudBackup();
@@ -941,8 +965,9 @@ async function runCalendarSync() {
 }
 
 async function maybeAutoCalendarSync() {
-  const connected = await DB.getParam("calendarConnected", false);
+  const connected = await isCalendarConnected();
   if (!connected) return;
+  await DB.setParam("calendarConnected", true); // auto-réparation si l'indicateur avait été perdu
   const last = await DB.getParam("lastCalendarSyncAt", null);
   if (last && Date.now() - new Date(last).getTime() < CALENDAR_SYNC_INTERVAL_MS) return;
   await runCalendarSync();
@@ -957,9 +982,11 @@ async function getCalendarEventsForDate(dateISO) {
 async function renderCalendarStatus() {
   const el = document.getElementById("calendar-status");
   if (!el) return;
-  const connected = await DB.getParam("calendarConnected", false);
+  const connected = await isCalendarConnected();
   const lastSync = await DB.getParam("lastCalendarSyncAt", null);
   const lastError = await DB.getParam("lastCalendarError", null);
+
+  if (connected) await DB.setParam("calendarConnected", true); // auto-réparation
 
   if (!connected) {
     el.innerHTML = `
@@ -989,6 +1016,7 @@ async function renderCalendarStatus() {
     <div class="sheet-actions" style="margin-top:10px;">
       <button class="btn-secondary" id="cal-sync-btn">Synchroniser maintenant</button>
     </div>
+    <button class="btn-secondary" id="cal-import-btn" style="width:100%;margin-top:10px;">Importer les clients depuis l'historique (2024–2025)</button>
     <button class="btn-danger" id="cal-disconnect-btn" style="width:100%;margin-top:10px;">Déconnecter</button>
   `;
   document.getElementById("cal-sync-btn").onclick = async () => {
@@ -997,6 +1025,7 @@ async function renderCalendarStatus() {
     toast(r.ok ? "Synchronisation réussie ✓" : "Échec : " + r.error);
     renderCalendarStatus();
   };
+  document.getElementById("cal-import-btn").onclick = () => navigate("import");
   document.getElementById("cal-disconnect-btn").onclick = async () => {
     calendarDisconnect();
     await DB.setParam("calendarConnected", false);
@@ -1005,12 +1034,202 @@ async function renderCalendarStatus() {
   };
 }
 
+// ---------- Import de clients depuis l'historique Google Agenda ----------
+const IMPORT_RANGE_START = "2024-01-01T00:00:00Z";
+const IMPORT_RANGE_END = "2026-01-01T00:00:00Z"; // couvre toute l'année 2025
+
+function extractCandidateFromEvent(ev) {
+  const title = (ev.summary || "").trim();
+  const desc = (ev.description || "").trim();
+  const full = `${title}\n${desc}`;
+  if (!title) return null;
+
+  const phoneMatch = full.match(/0[1-9](?:[\s.-]?\d{2}){4}/);
+  const emailMatch = full.match(/[\w.+-]+@[\w-]+\.[a-zA-Z]{2,}/);
+  const postalMatch = full.match(/\b\d{5}\b/);
+  let adresse = "";
+  if (postalMatch) {
+    const idx = postalMatch.index;
+    const start = Math.max(0, idx - 60);
+    const end = Math.min(full.length, idx + 30);
+    adresse = full.slice(start, end).replace(/\s+/g, " ").trim();
+  }
+
+  const startDate = (ev.start && (ev.start.date || (ev.start.dateTime || "").slice(0, 10))) || "";
+
+  return {
+    nom: title,
+    telephone: phoneMatch ? phoneMatch[0].trim() : "",
+    email: emailMatch ? emailMatch[0].trim() : "",
+    adresse,
+    date: startDate,
+  };
+}
+
+async function runCalendarImportScan(onProgress) {
+  const rawEvents = await calendarFetchEventsRaw(IMPORT_RANGE_START, IMPORT_RANGE_END, onProgress);
+  const candidatesMap = new Map();
+
+  for (const ev of rawEvents) {
+    const c = extractCandidateFromEvent(ev);
+    if (!c) continue;
+    const key = c.telephone ? c.telephone.replace(/\D/g, "") : c.nom.toLowerCase();
+    if (!candidatesMap.has(key)) {
+      candidatesMap.set(key, { ...c, occurrences: c.date ? [c.date] : [] });
+    } else {
+      const existing = candidatesMap.get(key);
+      if (c.date) existing.occurrences.push(c.date);
+      if (!existing.telephone && c.telephone) existing.telephone = c.telephone;
+      if (!existing.email && c.email) existing.email = c.email;
+      if (!existing.adresse && c.adresse) existing.adresse = c.adresse;
+    }
+  }
+
+  const candidates = Array.from(candidatesMap.values()).map((c, i) => ({
+    id: "cand_" + i + "_" + Math.random().toString(36).slice(2, 8),
+    nom: c.nom,
+    telephone: c.telephone,
+    email: c.email,
+    adresse: c.adresse,
+    occurrences: c.occurrences.sort(),
+  }));
+
+  await DB.setParam("importCandidates", candidates);
+  await DB.setParam("importScanAt", new Date().toISOString());
+  return candidates;
+}
+
+function findLikelyDuplicateClient(candidate, clients) {
+  const candPhone = (candidate.telephone || "").replace(/\D/g, "");
+  for (const c of clients) {
+    const cPhone = (c.telephone || "").replace(/\D/g, "");
+    if (candPhone && cPhone && candPhone === cPhone) return c;
+    if (clientFullName(c).trim().toLowerCase() === candidate.nom.trim().toLowerCase()) return c;
+  }
+  return null;
+}
+
+async function renderImport() {
+  const candidates = await DB.getParam("importCandidates", null);
+  const scanAt = await DB.getParam("importScanAt", null);
+
+  if (!candidates) {
+    root.innerHTML = `
+      <h2 class="view-heading">Import depuis Google Agenda</h2>
+      <div class="info-block">
+        <p style="font-size:13.5px;color:var(--ink-dim);margin:0 0 14px;">Récupère tous les événements de 2024 et 2025 depuis le Google Agenda déjà connecté, et propose de créer une fiche client pour chaque personne détectée — après vérification, rien n'est créé automatiquement.</p>
+        <button class="btn-primary" id="scan-btn" style="width:100%;">Analyser 2024–2025</button>
+      </div>
+    `;
+    document.getElementById("scan-btn").onclick = async () => {
+      toast("Récupération des événements…");
+      try {
+        const found = await runCalendarImportScan((n) => toast(`Récupération en cours… (${n} événements)`));
+        toast(`Analyse terminée — ${found.length} personnes détectées`);
+        render();
+      } catch (e) {
+        toast("Échec : " + e.message);
+      }
+    };
+    return;
+  }
+
+  const clients = await DB.listClients();
+  let html = `
+    <h2 class="view-heading">Import depuis Google Agenda</h2>
+    <p style="font-size:12.5px;color:var(--smoke);margin:-10px 0 14px;">Analyse du ${scanAt ? fmtDateTimeFR(scanAt) : ""} — ${candidates.length} personne(s) détectée(s). Vérifie et corrige avant de créer les fiches.</p>
+    <div class="sheet-actions" style="margin-bottom:14px;">
+      <button class="btn-secondary" id="rescan-btn">Relancer l'analyse</button>
+      <button class="btn-secondary" id="select-all-btn">Tout cocher</button>
+    </div>
+    <div id="import-list"></div>
+    <button class="btn-primary" id="create-selected-btn" style="width:100%;margin:14px 0 30px;">Créer les fiches cochées</button>
+  `;
+  root.innerHTML = html;
+
+  const listEl = document.getElementById("import-list");
+  listEl.innerHTML = candidates.map((c) => {
+    const dup = findLikelyDuplicateClient(c, clients);
+    const period = c.occurrences.length ? `${fmtDateFR(c.occurrences[0])} → ${fmtDateFR(c.occurrences[c.occurrences.length - 1])}` : "";
+    return `
+      <div class="info-block" data-cand-id="${c.id}" style="margin-top:8px;">
+        ${dup ? `<p class="geo-status geo-pending" style="margin:0 0 8px;">⚠️ Client existant probable : ${escapeHtml(clientFullName(dup))}</p>` : ""}
+        <div class="form-row-2">
+          <div class="form-row" style="margin-bottom:8px;"><label>Nom</label><input type="text" class="cand-nom" value="${escapeAttr(c.nom)}" /></div>
+          <div class="form-row" style="margin-bottom:8px;"><label>Téléphone</label><input type="text" class="cand-tel" value="${escapeAttr(c.telephone)}" /></div>
+        </div>
+        <div class="form-row" style="margin-bottom:8px;"><label>Adresse</label><input type="text" class="cand-adresse" value="${escapeAttr(c.adresse)}" /></div>
+        <p class="near-hint" style="margin:0 0 8px;">Vu ${c.occurrences.length} fois${period ? " · " + period : ""}</p>
+        <div style="display:flex;align-items:center;justify-content:space-between;">
+          <label style="display:flex;align-items:center;gap:8px;font-size:13.5px;">
+            <input type="checkbox" class="cand-select" ${dup ? "" : "checked"} />
+            Créer cette fiche
+          </label>
+          <button type="button" class="link-btn cand-dismiss">Ignorer</button>
+        </div>
+      </div>
+    `;
+  }).join("");
+
+  listEl.querySelectorAll("[data-cand-id]").forEach((row) => {
+    row.querySelector(".cand-dismiss").onclick = () => row.remove();
+  });
+
+  document.getElementById("select-all-btn").onclick = () => {
+    listEl.querySelectorAll(".cand-select").forEach((cb) => { cb.checked = true; });
+  };
+
+  document.getElementById("rescan-btn").onclick = async () => {
+    toast("Nouvelle analyse en cours…");
+    try {
+      const found = await runCalendarImportScan((n) => toast(`Récupération en cours… (${n} événements)`));
+      toast(`Analyse terminée — ${found.length} personnes détectées`);
+      render();
+    } catch (e) {
+      toast("Échec : " + e.message);
+    }
+  };
+
+  document.getElementById("create-selected-btn").onclick = async () => {
+    const rows = Array.from(listEl.querySelectorAll("[data-cand-id]"));
+    let created = 0;
+    for (const row of rows) {
+      const checkbox = row.querySelector(".cand-select");
+      if (!checkbox.checked) continue;
+      const nom = row.querySelector(".cand-nom").value.trim();
+      if (!nom) continue;
+      const client = {
+        nom,
+        prenom: "",
+        telephone: row.querySelector(".cand-tel").value.trim(),
+        adresse: row.querySelector(".cand-adresse").value.trim(),
+        nouveauClient: "non",
+      };
+      const saved = await DB.saveClient(client);
+      created++;
+      if (client.adresse) {
+        geocodeAddress(client.adresse).then(async (coords) => {
+          if (!coords) return;
+          const fresh = await DB.getClient(saved.id);
+          if (fresh) { fresh.lat = coords.lat; fresh.lon = coords.lon; fresh.geocodeStatus = "ok"; await DB.saveClient(fresh); }
+        });
+      }
+    }
+    await DB.setParam("importCandidates", null);
+    await DB.setParam("importScanAt", null);
+    toast(`${created} fiche(s) créée(s) ✓`);
+    navigate("clients");
+  };
+}
+
 async function renderDriveStatus() {
   const el = document.getElementById("drive-status");
   if (!el) return;
-  const connected = await DB.getParam("driveConnected", false);
+  const connected = await isDriveConnected();
   const lastBackup = await DB.getParam("lastCloudBackupAt", null);
   const lastError = await DB.getParam("lastCloudError", null);
+
+  if (connected) await DB.setParam("driveConnected", true); // auto-réparation
 
   if (!connected) {
     el.innerHTML = `
@@ -1731,7 +1950,21 @@ async function openHonoreForm(r, client) {
     });
     r.statut = "honore";
     r.paiement = paiement;
+    // On fige ici le statut "nouveau client" tel qu'il était au moment de CE rendez-vous —
+    // le récapitulatif s'appuiera toujours sur cette valeur figée, jamais sur l'état
+    // actuel de la fiche (qui, lui, bascule juste après pour les prochaines fois).
+    r.etaitNouveauClient = !!(client && client.nouveauClient === "oui");
     await DB.saveRendezvous(r);
+
+    // Bascule automatique en client existant, pour les rendez-vous SUIVANTS uniquement.
+    if (client && client.nouveauClient === "oui") {
+      const freshClient = await DB.getClient(client.id);
+      if (freshClient) {
+        freshClient.nouveauClient = "non";
+        await DB.saveClient(freshClient);
+      }
+    }
+
     closeSheet();
     toast("Rendez-vous honoré, ajouté à l'historique");
     navigate("agenda");

@@ -2,7 +2,7 @@
    Vues : Accueil / Agenda / Clients / Fiche client / Paramètres
    Toute la donnée passe par DB (db.js → IndexedDB). */
 
-const APP_VERSION = "1.19.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
+const APP_VERSION = "1.22.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
 
 const JOURS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
 const JOURS_COURT = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
@@ -740,7 +740,8 @@ async function renderFiche() {
 
     <div class="info-block">
       <h3>Coordonnées</h3>
-      <div class="info-row"><span class="k">Téléphone</span><span class="v">${escapeHtml(c.telephone || "—")}</span></div>
+      <div class="info-row"><span class="k">Téléphone</span><span class="v">${c.telephone ? `<a href="tel:${c.telephone.replace(/\s+/g, "")}" style="color:inherit;text-decoration:underline;">${escapeHtml(c.telephone)}</a>` : "—"}</span></div>
+      ${c.telephone2 ? `<div class="info-row"><span class="k">Téléphone secondaire</span><span class="v"><a href="tel:${c.telephone2.replace(/\s+/g, "")}" style="color:inherit;text-decoration:underline;">${escapeHtml(c.telephone2)}</a></span></div>` : ""}
       ${c.email ? `<div class="info-row"><span class="k">E-mail</span><span class="v">${escapeHtml(c.email)}</span></div>` : ""}
       <div class="info-row"><span class="k">Nouveau client</span><span class="v">${nouveauClientLabel(c)}</span></div>
     </div>
@@ -1102,7 +1103,7 @@ async function renderCalendarStatus() {
     <div class="sheet-actions" style="margin-top:10px;">
       <button class="btn-secondary" id="cal-sync-btn">Synchroniser maintenant</button>
     </div>
-    <button class="btn-secondary" id="cal-import-btn" style="width:100%;margin-top:10px;">Importer les clients depuis l'historique (2024–2025)</button>
+    <button class="btn-secondary" id="cal-import-btn" style="width:100%;margin-top:10px;">Importer les clients depuis l'historique (2024–2027)</button>
     <button class="btn-danger" id="cal-disconnect-btn" style="width:100%;margin-top:10px;">Déconnecter</button>
   `;
   document.getElementById("cal-sync-btn").onclick = async () => {
@@ -1122,7 +1123,7 @@ async function renderCalendarStatus() {
 
 // ---------- Import de clients depuis l'historique Google Agenda ----------
 const IMPORT_RANGE_START = "2024-01-01T00:00:00Z";
-const IMPORT_RANGE_END = "2026-01-01T00:00:00Z"; // couvre toute l'année 2025
+const IMPORT_RANGE_END = "2028-01-01T00:00:00Z"; // couvre 2024 à 2027 inclus
 
 // Mots-clés d'événements personnels/non-clients à exclure de l'import (rendez-vous
 // médicaux, loisirs, administratif...). Comparaison insensible aux accents et à la casse.
@@ -1179,7 +1180,7 @@ async function runCalendarImportScan(onProgress) {
     if (!c) continue;
     const key = c.telephone ? c.telephone.replace(/\D/g, "") : c.nom.toLowerCase();
     if (!candidatesMap.has(key)) {
-      candidatesMap.set(key, { ...c, occurrences: c.date ? [c.date] : [] });
+      candidatesMap.set(key, { ...c, key, occurrences: c.date ? [c.date] : [] });
     } else {
       const existing = candidatesMap.get(key);
       if (c.date) existing.occurrences.push(c.date);
@@ -1189,18 +1190,32 @@ async function runCalendarImportScan(onProgress) {
     }
   }
 
-  const candidates = Array.from(candidatesMap.values()).map((c, i) => ({
-    id: "cand_" + i + "_" + Math.random().toString(36).slice(2, 8),
-    nom: c.nom,
-    telephone: c.telephone,
-    email: c.email,
-    adresse: c.adresse,
-    occurrences: c.occurrences.sort(),
-  }));
+  const excludedKeys = new Set((await DB.getParam("importExcludedKeys", [])) || []);
+
+  const candidates = Array.from(candidatesMap.values())
+    .filter((c) => !excludedKeys.has(c.key))
+    .map((c, i) => ({
+      id: "cand_" + i + "_" + Math.random().toString(36).slice(2, 8),
+      key: c.key,
+      nom: c.nom,
+      telephone: c.telephone,
+      email: c.email,
+      adresse: c.adresse,
+      occurrences: c.occurrences.sort(),
+    }));
 
   await DB.setParam("importCandidates", candidates);
   await DB.setParam("importScanAt", new Date().toISOString());
   return candidates;
+}
+
+async function excludeImportCandidatePermanently(key) {
+  if (!key) return;
+  const current = (await DB.getParam("importExcludedKeys", [])) || [];
+  if (!current.includes(key)) {
+    current.push(key);
+    await DB.setParam("importExcludedKeys", current);
+  }
 }
 
 function findLikelyDuplicateClient(candidate, clients) {
@@ -1221,8 +1236,8 @@ async function renderImport() {
     root.innerHTML = `
       <h2 class="view-heading">Import depuis Google Agenda</h2>
       <div class="info-block">
-        <p style="font-size:13.5px;color:var(--ink-dim);margin:0 0 14px;">Récupère tous les événements de 2024 et 2025 depuis le Google Agenda déjà connecté, et propose de créer une fiche client pour chaque personne détectée — après vérification, rien n'est créé automatiquement.</p>
-        <button class="btn-primary" id="scan-btn" style="width:100%;">Analyser 2024–2025</button>
+        <p style="font-size:13.5px;color:var(--ink-dim);margin:0 0 14px;">Récupère tous les événements de 2024 à 2027 depuis le Google Agenda déjà connecté, et propose de créer une fiche client pour chaque personne détectée — après vérification, rien n'est créé automatiquement.</p>
+        <button class="btn-primary" id="scan-btn" style="width:100%;">Analyser 2024–2027</button>
       </div>
     `;
     document.getElementById("scan-btn").onclick = async () => {
@@ -1244,7 +1259,10 @@ async function renderImport() {
     <p style="font-size:12.5px;color:var(--smoke);margin:-10px 0 14px;">Analyse du ${scanAt ? fmtDateTimeFR(scanAt) : ""} — ${candidates.length} personne(s) détectée(s). Vérifie et corrige avant de créer les fiches. Tu peux traiter les fiches une par une, ou en cocher plusieurs pour les créer d'un coup.</p>
     <div class="sheet-actions" style="margin-bottom:14px;">
       <button class="btn-secondary" id="rescan-btn">Relancer l'analyse</button>
+    </div>
+    <div class="sheet-actions" style="margin-bottom:14px;">
       <button class="btn-secondary" id="select-all-btn">Tout cocher</button>
+      <button class="btn-secondary" id="deselect-all-btn">Tout décocher</button>
     </div>
     <div id="import-list"></div>
     <button class="btn-primary" id="create-selected-btn" style="width:100%;margin:14px 0 30px;">Créer les fiches cochées</button>
@@ -1256,7 +1274,7 @@ async function renderImport() {
     const dup = findLikelyDuplicateClient(c, clients);
     const period = c.occurrences.length ? `${fmtDateFR(c.occurrences[0])} → ${fmtDateFR(c.occurrences[c.occurrences.length - 1])}` : "";
     return `
-      <div class="info-block" data-cand-id="${c.id}" style="margin-top:8px;">
+      <div class="info-block" data-cand-id="${c.id}" data-cand-key="${escapeAttr(c.key)}" style="margin-top:8px;">
         ${dup ? `<p class="geo-status geo-pending" style="margin:0 0 8px;">⚠️ Client existant probable : ${escapeHtml(clientFullName(dup))}</p>` : ""}
         <div class="form-row-2">
           <div class="form-row" style="margin-bottom:8px;"><label>Nom</label><input type="text" class="cand-nom" value="${escapeAttr(c.nom)}" /></div>
@@ -1271,6 +1289,7 @@ async function renderImport() {
           </label>
           <div style="display:flex;gap:14px;align-items:center;">
             <button type="button" class="link-btn cand-dismiss">Ignorer</button>
+            <button type="button" class="link-btn cand-delete" style="color:var(--danger);">Supprimer</button>
             <button type="button" class="btn-secondary cand-create-one" style="padding:8px 14px;">Créer cette fiche</button>
           </div>
         </div>
@@ -1297,6 +1316,8 @@ async function renderImport() {
         if (fresh) { fresh.lat = coords.lat; fresh.lon = coords.lon; fresh.geocodeStatus = "ok"; await DB.saveClient(fresh); }
       });
     }
+    // Une fois créée, cette personne ne doit plus jamais réapparaître dans une future analyse.
+    await excludeImportCandidatePermanently(row.dataset.candKey);
     return true;
   }
 
@@ -1307,8 +1328,15 @@ async function renderImport() {
 
   listEl.querySelectorAll("[data-cand-id]").forEach((row) => {
     const candId = row.dataset.candId;
+    const candKey = row.dataset.candKey;
     row.querySelector(".cand-dismiss").onclick = async () => {
       await removeCandidateFromStorage(candId);
+      row.remove();
+    };
+    row.querySelector(".cand-delete").onclick = async () => {
+      await removeCandidateFromStorage(candId);
+      await excludeImportCandidatePermanently(candKey);
+      toast("Ne réapparaîtra plus lors des prochaines analyses");
       row.remove();
     };
     row.querySelector(".cand-create-one").onclick = async () => {
@@ -1322,6 +1350,9 @@ async function renderImport() {
 
   document.getElementById("select-all-btn").onclick = () => {
     listEl.querySelectorAll(".cand-select").forEach((cb) => { cb.checked = true; });
+  };
+  document.getElementById("deselect-all-btn").onclick = () => {
+    listEl.querySelectorAll(".cand-select").forEach((cb) => { cb.checked = false; });
   };
 
   document.getElementById("rescan-btn").onclick = async () => {
@@ -1535,6 +1566,21 @@ document.getElementById("fab-add").onclick = () => {
 // onSaved(client) optionnel : si fourni, appelé après l'enregistrement à la place
 // de la navigation par défaut vers la fiche (utilisé pour créer un client depuis
 // le formulaire de rendez-vous, sans perdre le rendez-vous en cours de saisie).
+async function checkClientDuplicates(saved) {
+  const all = await DB.listClients();
+  const savedPhones = [saved.telephone, saved.telephone2].map((p) => (p || "").replace(/\D/g, "")).filter(Boolean);
+  const savedName = clientFullName(saved).trim().toLowerCase();
+  const phoneMatches = [];
+  const nameMatches = [];
+  for (const c of all) {
+    if (c.id === saved.id) continue;
+    const cPhones = [c.telephone, c.telephone2].map((p) => (p || "").replace(/\D/g, "")).filter(Boolean);
+    if (savedPhones.some((p) => cPhones.includes(p))) phoneMatches.push(c);
+    if (savedName && clientFullName(c).trim().toLowerCase() === savedName) nameMatches.push(c);
+  }
+  return { phoneMatches, nameMatches };
+}
+
 async function openClientForm(existing, onSaved) {
   const c = existing || {};
   openSheet(`
@@ -1552,6 +1598,7 @@ async function openClientForm(existing, onSaved) {
       </div>
     </div>
     <div class="form-row"><label>Téléphone</label><input type="tel" id="f-tel" value="${escapeAttr(c.telephone)}" /></div>
+    <div class="form-row"><label>Téléphone secondaire (facultatif)</label><input type="tel" id="f-tel2" value="${escapeAttr(c.telephone2)}" /></div>
     <div class="form-row"><label>E-mail (facultatif)</label><input type="email" id="f-email" value="${escapeAttr(c.email)}" /></div>
     <div class="form-row"><label>Adresse</label><input type="text" id="f-adresse" value="${escapeAttr(c.adresse)}" /></div>
     <div class="form-row-2">
@@ -1584,6 +1631,7 @@ async function openClientForm(existing, onSaved) {
       prenom, nom,
       nouveauClient: selCivilite,
       telephone: document.getElementById("f-tel").value.trim(),
+      telephone2: document.getElementById("f-tel2").value.trim(),
       email: document.getElementById("f-email").value.trim(),
       adresse: document.getElementById("f-adresse").value.trim(),
       marque: document.getElementById("f-marque").value.trim(),
@@ -1599,11 +1647,28 @@ async function openClientForm(existing, onSaved) {
     const saved = await DB.saveClient(client);
     closeSheet();
 
-    if (onSaved) {
-      onSaved(saved);
+    const proceedAfterSave = () => {
+      if (onSaved) {
+        onSaved(saved);
+      } else {
+        toast(existing ? "Client mis à jour" : "Client créé");
+        navigate("fiche", saved.id);
+      }
+    };
+
+    const dup = await checkClientDuplicates(saved);
+    if (dup.phoneMatches.length > 0) {
+      openSheet(`
+        <h2>⚠️ Numéro déjà utilisé</h2>
+        <p style="color:var(--smoke);font-size:14px;">Ce numéro de téléphone est déjà associé à : <strong>${dup.phoneMatches.map((x) => escapeHtml(clientFullName(x))).join(", ")}</strong>. Vérifie qu'il ne s'agit pas d'un doublon.</p>
+        <div class="sheet-actions"><button class="btn-primary" id="dup-ok-btn" style="width:100%;">Continuer</button></div>
+      `);
+      document.getElementById("dup-ok-btn").onclick = () => { closeSheet(); proceedAfterSave(); };
     } else {
-      toast(existing ? "Client mis à jour" : "Client créé");
-      navigate("fiche", saved.id);
+      if (dup.nameMatches.length > 0) {
+        toast(`ℹ️ Homonyme existant : ${dup.nameMatches.map((x) => clientFullName(x)).join(", ")}`);
+      }
+      proceedAfterSave();
     }
 
     // Géocodage en arrière-plan : ne bloque jamais l'enregistrement du client.

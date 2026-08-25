@@ -2,7 +2,7 @@
    Vues : Accueil / Agenda / Clients / Fiche client / Paramètres
    Toute la donnée passe par DB (db.js → IndexedDB). */
 
-const APP_VERSION = "1.27.1"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
+const APP_VERSION = "1.28.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
 
 const JOURS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
 const JOURS_COURT = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
@@ -304,15 +304,61 @@ async function maybeFridayReminder() {
   toast("N'oublie pas d'envoyer le récapitulatif des RDV honorés aujourd'hui !");
 }
 
+async function maybeStaleCalendarWarning() {
+  const connected = await isCalendarConnected();
+  if (!connected) return;
+  const lastSync = await DB.getParam("lastCalendarSyncAt", null);
+  const stale = !lastSync || Date.now() - new Date(lastSync).getTime() > 48 * 60 * 60 * 1000;
+  if (!stale) return;
+  const todayISO = toISO(new Date());
+  const lastShown = await DB.getParam("lastStaleCalendarWarningDate", null);
+  if (lastShown === todayISO) return;
+  await DB.setParam("lastStaleCalendarWarningDate", todayISO);
+  toast("⚠️ Google Agenda pas synchronisé depuis plus de 48h — vérifie ta connexion dans Paramètres.");
+}
+
 // ---------- Vue Agenda (colonnes semaine, façon Google Agenda) ----------
 async function renderAgenda() {
   root.innerHTML = `
     <input type="text" class="search-bar" id="agenda-search" placeholder="Rechercher un client dans l'agenda…" value="${escapeHtml(state.agendaSearch)}" />
+    <div id="calendar-sync-status"></div>
     <div id="agenda-body"></div>
   `;
   const input = document.getElementById("agenda-search");
   input.oninput = () => { state.agendaSearch = input.value; refreshAgendaBody(); };
+  await renderCalendarSyncStatusLine();
   await refreshAgendaBody();
+}
+
+function fmtRelativeTime(iso) {
+  if (!iso) return "jamais";
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const h = Math.floor(diffMs / (60 * 60 * 1000));
+  if (h < 1) return "à l'instant";
+  if (h < 24) return `il y a ${h} h`;
+  const d = Math.floor(h / 24);
+  return `il y a ${d} j`;
+}
+
+async function renderCalendarSyncStatusLine() {
+  const el = document.getElementById("calendar-sync-status");
+  if (!el) return;
+  const connected = await isCalendarConnected();
+  if (!connected) { el.innerHTML = ""; return; }
+  const lastSync = await DB.getParam("lastCalendarSyncAt", null);
+  const stale = !lastSync || Date.now() - new Date(lastSync).getTime() > 48 * 60 * 60 * 1000;
+  el.innerHTML = `
+    <button type="button" id="agenda-resync-btn" class="link-btn" style="margin:-6px 0 12px;font-size:11.5px;${stale ? "color:var(--danger);" : ""}">
+      ${stale ? "⚠️" : "🔄"} Agenda perso synchronisé ${fmtRelativeTime(lastSync)} — appuyer pour resynchroniser
+    </button>
+  `;
+  document.getElementById("agenda-resync-btn").onclick = async () => {
+    toast("Synchronisation en cours…");
+    const r = await runCalendarSync();
+    toast(r.ok ? "Synchronisation réussie ✓" : "Échec : " + r.error);
+    await renderCalendarSyncStatusLine();
+    await refreshAgendaBody();
+  };
 }
 
 async function refreshAgendaBody() {
@@ -2669,3 +2715,4 @@ render();
 maybeAutoCloudBackup();
 maybeAutoCalendarSync();
 maybeFridayReminder();
+maybeStaleCalendarWarning();

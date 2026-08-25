@@ -2,7 +2,7 @@
    Vues : Accueil / Agenda / Clients / Fiche client / Paramètres
    Toute la donnée passe par DB (db.js → IndexedDB). */
 
-const APP_VERSION = "1.25.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
+const APP_VERSION = "1.27.1"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
 
 const JOURS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
 const JOURS_COURT = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
@@ -946,6 +946,92 @@ async function openClientShare(c, historique) {
   };
 }
 
+// ---------- Comparatif des marques installées ----------
+function levenshtein(a, b) {
+  const m = a.length, n = b.length;
+  if (m === 0) return n;
+  if (n === 0) return m;
+  const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  for (let i = 0; i <= m; i++) dp[i][0] = i;
+  for (let j = 0; j <= n; j++) dp[0][j] = j;
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + cost);
+    }
+  }
+  return dp[m][n];
+}
+function normalizeBrand(s) {
+  return normalizeForMatch(s).replace(/[^a-z0-9]/g, "");
+}
+
+// Regroupe les marques dont l'orthographe se ressemble (ex : "Extraflamme" / "Extraflame" /
+// "EXTRA FLAMME") sous une seule entrée, sans liste de marques prédéfinie à maintenir.
+async function computeBrandStats() {
+  const clients = await DB.listClients();
+  const counts = new Map();
+  clients.forEach((c) => {
+    const raw = (c.marque || "").trim();
+    if (!raw) return;
+    const norm = normalizeBrand(raw);
+    if (!norm) return;
+    if (!counts.has(norm)) counts.set(norm, { count: 0, labels: new Map() });
+    const entry = counts.get(norm);
+    entry.count++;
+    entry.labels.set(raw, (entry.labels.get(raw) || 0) + 1);
+  });
+
+  const entries = Array.from(counts.entries()).sort((a, b) => b[1].count - a[1].count);
+  const clusters = [];
+  entries.forEach(([norm, data]) => {
+    let target = null;
+    for (const cl of clusters) {
+      const threshold = Math.max(1, Math.floor(Math.max(cl.key.length, norm.length) * 0.25));
+      if (levenshtein(cl.key, norm) <= threshold) { target = cl; break; }
+    }
+    if (target) {
+      target.count += data.count;
+      data.labels.forEach((c, label) => target.labels.set(label, (target.labels.get(label) || 0) + c));
+    } else {
+      clusters.push({ key: norm, count: data.count, labels: new Map(data.labels) });
+    }
+  });
+
+  const results = clusters.map((cl) => {
+    let bestLabel = "", bestCount = -1;
+    cl.labels.forEach((c, label) => { if (c > bestCount) { bestCount = c; bestLabel = label; } });
+    return { label: bestLabel.toUpperCase(), count: cl.count };
+  }).sort((a, b) => b.count - a.count);
+
+  const total = results.reduce((s, r) => s + r.count, 0);
+  return { results, total };
+}
+
+async function renderBrandStats() {
+  const el = document.getElementById("brand-stats");
+  if (!el) return;
+  const { results, total } = await computeBrandStats();
+  if (total === 0) {
+    el.innerHTML = '<p class="near-hint">Aucune marque renseignée pour l\'instant sur les fiches clients.</p>';
+    return;
+  }
+  el.innerHTML = results.map((r) => {
+    const pct = ((r.count / total) * 100).toFixed(1);
+    return `
+      <div style="margin-bottom:11px;">
+        <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px;">
+          <span>${escapeHtml(r.label)}</span>
+          <span style="color:var(--smoke);font-family:var(--font-mono);">${r.count} · ${pct}%</span>
+        </div>
+        <div style="background:var(--surface-2);border-radius:6px;height:10px;overflow:hidden;">
+          <div style="background:var(--ember);height:100%;width:${pct}%;"></div>
+        </div>
+      </div>
+    `;
+  }).join("");
+}
+
 // ---------- Paramètres ----------
 async function renderReglages() {
   const retourDepart = await DB.getParam("retourDepart", false);
@@ -978,6 +1064,12 @@ async function renderReglages() {
         ${clientsSansGeo > 0 ? `${clientsSansGeo} adresse(s) client en attente de géocodage.` : "Toutes les adresses connues sont géocodées."}
       </p>
       <button class="btn-secondary" id="geocode-all-btn" style="width:100%;" ${clientsSansGeo === 0 ? "disabled" : ""}>Géocoder les adresses en attente</button>
+    </div>
+
+    <div class="info-block">
+      <h3>Marques installées</h3>
+      <p style="font-size:12.5px;color:var(--smoke);margin:0 0 12px;">Part de chaque marque parmi les fiches clients. Les orthographes proches (ex : "Extraflamme"/"Extraflame") sont regroupées automatiquement.</p>
+      <div id="brand-stats"></div>
     </div>
 
     <div class="info-block">
@@ -1042,6 +1134,7 @@ async function renderReglages() {
 
   await renderDriveStatus();
   await renderCalendarStatus();
+  await renderBrandStats();
 
   const localImportInput = document.getElementById("local-import-file");
   document.getElementById("local-import-btn").onclick = () => localImportInput.click();
@@ -1158,8 +1251,11 @@ async function runCalendarSync() {
     const now = new Date();
     const future = addDays(now, CALENDAR_SYNC_HORIZON_DAYS);
     const events = await calendarFetchEvents(now.toISOString(), future.toISOString());
+    // Seuls les événements marqués "RDV"/"rdv" par ton père sont repris — le reste de
+    // son agenda personnel (médecin, famille, etc.) n'est pas importé dans l'appli.
+    const rdvEvents = events.filter((e) => /rdv/i.test(`${e.title} ${e.description || ""}`));
     const byDate = {};
-    events.forEach((e) => { (byDate[e.date] ||= []).push({ time: e.time, title: e.title }); });
+    rdvEvents.forEach((e) => { (byDate[e.date] ||= []).push({ time: e.time, title: e.title }); });
     await DB.setParam("calendarEventsCache", byDate);
     await DB.setParam("lastCalendarSyncAt", new Date().toISOString());
     await DB.setParam("lastCalendarError", null);
@@ -1199,7 +1295,7 @@ async function renderCalendarStatus() {
 
   if (!connected) {
     el.innerHTML = `
-      <p style="font-size:13.5px;color:var(--smoke);margin:0 0 12px;">Affiche tes rendez-vous Google Agenda dans l'appli, en lecture seule, pour éviter les doubles réservations.</p>
+      <p style="font-size:13.5px;color:var(--smoke);margin:0 0 12px;">Affiche dans l'appli, en lecture seule, les événements de ton Google Agenda dont le titre ou la description contient "RDV" — pour éviter les doubles réservations sans reprendre tout ton agenda personnel.</p>
       <button class="btn-primary" id="cal-connect-btn" style="width:100%;">Connecter Google Agenda</button>
     `;
     document.getElementById("cal-connect-btn").onclick = async () => {
@@ -1828,10 +1924,27 @@ async function confirmDeleteClient(c) {
 }
 
 // ---------- Rendez-vous proches ----------
-async function renderNearbyHtml(clientId, dateISO, excludeRdvId) {
+async function renderNearbyHtml(clientId, dateISO, excludeRdvId, radiusKm, horizonMonths) {
+  const controls = `
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:14px;margin-bottom:10px;">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <div style="display:flex;flex-direction:column;gap:3px;">
+          <button type="button" id="nearby-radius-up" style="width:32px;height:24px;border-radius:6px;border:1px solid var(--line);background:var(--surface-2);color:var(--ink);font-size:11px;">▲</button>
+          <button type="button" id="nearby-radius-down" style="width:32px;height:24px;border-radius:6px;border:1px solid var(--line);background:var(--surface-2);color:var(--ink);font-size:11px;">▼</button>
+        </div>
+        <div id="nearby-radius-value" style="font-family:var(--font-mono);font-size:15px;font-weight:600;">${radiusKm} km</div>
+      </div>
+      <div class="pill-choice" id="nearby-months" style="flex:0 0 auto;">
+        <button type="button" data-months="3" class="${horizonMonths === 3 ? "active period-active" : ""}" style="padding:8px 10px;">3 mois</button>
+        <button type="button" data-months="6" class="${horizonMonths === 6 ? "active period-active" : ""}" style="padding:8px 10px;">6 mois</button>
+        <button type="button" data-months="13" class="${horizonMonths === 13 ? "active period-active" : ""}" style="padding:8px 10px;">13 mois</button>
+      </div>
+    </div>
+  `;
   const wrap = (inner) => `
     <div class="info-block" style="margin-top:2px;">
       <h3>Rendez-vous proches</h3>
+      ${controls}
       ${inner}
     </div>
   `;
@@ -1846,7 +1959,7 @@ async function renderNearbyHtml(clientId, dateISO, excludeRdvId) {
   }
   const start = new Date(dateISO);
   const end = new Date(dateISO);
-  end.setDate(end.getDate() + 90);
+  end.setMonth(end.getMonth() + horizonMonths);
   const startISO = toISO(start), endISO = toISO(end);
 
   const all = await DB.listRendezvous();
@@ -1860,22 +1973,22 @@ async function renderNearbyHtml(clientId, dateISO, excludeRdvId) {
       if (!rc || rc.lat == null) return null;
       return { date: r.date, name: clientFullName(rc), distKm: haversineKm(client.lat, client.lon, rc.lat, rc.lon) };
     })
-    .filter((x) => x && x.distKm <= 15)
+    .filter((x) => x && x.distKm <= radiusKm)
     .sort((a, b) => a.distKm - b.distKm)
     .slice(0, 5);
 
   if (withDist.length === 0) {
-    return wrap('<p class="near-hint">Aucun rendez-vous trouvé à moins de 15 km dans les 90 prochains jours.</p>');
+    return wrap(`<p class="near-hint">Aucun rendez-vous trouvé à moins de ${radiusKm} km dans les ${horizonMonths} prochains mois.</p>`);
   }
   return wrap(`
-    <p class="near-hint" style="margin:0 0 6px;">Dans un rayon de 15 km, sur les 90 prochains jours. Touche une date pour la reprendre pour ce rendez-vous.</p>
+    <p class="near-hint" style="margin:0 0 6px;">Touche une date pour la reprendre pour ce rendez-vous.</p>
     <div class="near-list">
       ${withDist.map((x) => `<button type="button" class="near-item near-item-btn" data-copy-date="${x.date}"><span>${fmtDateFullFR(x.date)} — ${escapeHtml(x.name)}</span><span class="dist">${x.distKm.toFixed(1)} km</span></button>`).join("")}
     </div>
   `);
 }
 
-async function computeNearbyByPosition(coords, horizonDays) {
+async function computeNearbyByPosition(coords, horizonDays, radiusKm = 20) {
   const startISO = toISO(new Date());
   const endDate = new Date();
   endDate.setDate(endDate.getDate() + horizonDays);
@@ -1891,7 +2004,7 @@ async function computeNearbyByPosition(coords, horizonDays) {
       if (!c || c.lat == null) return null;
       return { date: r.date, name: clientFullName(c), distKm: haversineKm(coords.lat, coords.lon, c.lat, c.lon) };
     })
-    .filter((x) => x && x.distKm <= 20)
+    .filter((x) => x && x.distKm <= radiusKm)
     .sort((a, b) => a.distKm - b.distKm)
     .slice(0, 8);
 }
@@ -1917,6 +2030,7 @@ async function openRdvForm(prefill = {}, existing) {
     <div id="client-existing-block">
       <div class="form-row">
         <div id="f-client-selected" class="client-picker-selected"></div>
+        <div id="f-client-comment"></div>
         <input type="text" id="f-client-search" placeholder="Rechercher un client…" />
         <div id="f-client-results" class="client-picker-results"></div>
       </div>
@@ -1949,11 +2063,21 @@ async function openRdvForm(prefill = {}, existing) {
     <div class="info-block" style="margin-top:2px;">
       <h3>Proposer une date selon le secteur</h3>
       <p class="near-hint" style="margin:0 0 8px;">Utile au téléphone : indique la ville ou l'adresse dite par l'appelant pour voir si d'autres clients y ont déjà rendez-vous.</p>
-      <input type="text" id="f-sector-input" placeholder="Ville ou adresse (ex : Étretat)" style="width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:10px;font-size:15px;background:var(--surface);color:var(--ink);margin-bottom:8px;" />
+      <input type="text" id="f-sector-input" placeholder="Ville ou adresse (ex : Étretat)" style="width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:10px;font-size:15px;background:var(--surface);color:var(--ink);margin-bottom:10px;" />
+      <div class="form-row" style="margin-bottom:10px;">
+        <label>Rayon de recherche</label>
+        <div style="display:flex;align-items:center;gap:12px;">
+          <div style="display:flex;flex-direction:column;gap:3px;">
+            <button type="button" id="radius-up" style="width:36px;height:26px;border-radius:7px;border:1px solid var(--line);background:var(--surface-2);color:var(--ink);">▲</button>
+            <button type="button" id="radius-down" style="width:36px;height:26px;border-radius:7px;border:1px solid var(--line);background:var(--surface-2);color:var(--ink);">▼</button>
+          </div>
+          <div id="radius-value" style="font-family:var(--font-mono);font-size:18px;font-weight:600;">5 km</div>
+        </div>
+      </div>
       <div class="pill-choice pill-3" id="geo-near-buttons">
-        <button type="button" data-days="30">30 jours</button>
-        <button type="button" data-days="90">90 jours</button>
-        <button type="button" data-days="365">12 mois</button>
+        <button type="button" data-months="3">3 mois</button>
+        <button type="button" data-months="6">6 mois</button>
+        <button type="button" data-months="13">13 mois</button>
       </div>
       <div id="geo-near-results"></div>
     </div>
@@ -1981,6 +2105,12 @@ async function openRdvForm(prefill = {}, existing) {
   function updateSelectedDisplay() {
     const c = clients.find((x) => x.id === selectedClientId);
     selectedEl.innerHTML = c ? `<div class="client-picker-chip">${escapeHtml(clientFullName(c))}</div>` : `<div class="near-hint">Aucun client sélectionné</div>`;
+    const commentEl = document.getElementById("f-client-comment");
+    if (commentEl) {
+      commentEl.innerHTML = (c && c.commentaires)
+        ? `<p class="near-hint" style="margin:6px 0 0;">💬 ${escapeHtml(c.commentaires)}</p>`
+        : "";
+    }
   }
   updateSelectedDisplay();
 
@@ -2015,14 +2145,23 @@ async function openRdvForm(prefill = {}, existing) {
   };
 
   const nearContainer = document.getElementById("near-container");
+  let nearbyRadiusKm = 5;
+  let nearbyHorizonMonths = 3;
   async function refreshNearby() {
     const dateVal = document.getElementById("f-date").value;
-    nearContainer.innerHTML = await renderNearbyHtml(selectedClientId, dateVal, existing ? existing.id : null);
+    nearContainer.innerHTML = await renderNearbyHtml(selectedClientId, dateVal, existing ? existing.id : null, nearbyRadiusKm, nearbyHorizonMonths);
     nearContainer.querySelectorAll("[data-copy-date]").forEach((el) => {
       el.onclick = () => {
         document.getElementById("f-date").value = el.dataset.copyDate;
         refreshNearby();
       };
+    });
+    const upBtn = document.getElementById("nearby-radius-up");
+    const downBtn = document.getElementById("nearby-radius-down");
+    if (upBtn) upBtn.onclick = () => { nearbyRadiusKm = Math.min(50, nearbyRadiusKm + 1); refreshNearby(); };
+    if (downBtn) downBtn.onclick = () => { nearbyRadiusKm = Math.max(1, nearbyRadiusKm - 1); refreshNearby(); };
+    nearContainer.querySelectorAll("#nearby-months button").forEach((b) => {
+      b.onclick = () => { nearbyHorizonMonths = parseInt(b.dataset.months, 10); refreshNearby(); };
     });
   }
   async function refreshCalendarWarning() {
@@ -2039,8 +2178,19 @@ async function openRdvForm(prefill = {}, existing) {
   refreshCalendarWarning();
 
   let sectorCoords = null;
+  let radiusKm = 5;
   const sectorInput = document.getElementById("f-sector-input");
   sectorInput.oninput = () => { sectorCoords = null; };
+
+  const radiusValueEl = document.getElementById("radius-value");
+  document.getElementById("radius-up").onclick = () => {
+    radiusKm = Math.min(50, radiusKm + 1);
+    radiusValueEl.textContent = `${radiusKm} km`;
+  };
+  document.getElementById("radius-down").onclick = () => {
+    radiusKm = Math.max(1, radiusKm - 1);
+    radiusValueEl.textContent = `${radiusKm} km`;
+  };
 
   document.querySelectorAll("#geo-near-buttons button").forEach((b) => {
     b.onclick = async () => {
@@ -2053,12 +2203,15 @@ async function openRdvForm(prefill = {}, existing) {
         if (!coords) { toast("Adresse introuvable (vérifie l'orthographe ou la connexion)"); return; }
         sectorCoords = coords;
       }
-      const days = parseInt(b.dataset.days, 10);
-      const results = await computeNearbyByPosition(coords, days);
+      const months = parseInt(b.dataset.months, 10);
+      const endDate = new Date();
+      endDate.setMonth(endDate.getMonth() + months);
+      const horizonDays = Math.round((endDate.getTime() - Date.now()) / (24 * 60 * 60 * 1000));
+      const results = await computeNearbyByPosition(coords, horizonDays, radiusKm);
       const resultsEl = document.getElementById("geo-near-results");
       resultsEl.innerHTML = results.length
         ? `<div class="near-list">${results.map((x) => `<button type="button" class="near-item near-item-btn" data-copy-date-geo="${x.date}"><span>${fmtDateFullFR(x.date)} — ${escapeHtml(x.name)}</span><span class="dist">${x.distKm.toFixed(1)} km</span></button>`).join("")}</div>`
-        : `<p class="near-hint">Aucun rendez-vous trouvé à proximité sur cette période.</p>`;
+        : `<p class="near-hint">Aucun rendez-vous trouvé à moins de ${radiusKm} km sur cette période.</p>`;
       resultsEl.querySelectorAll("[data-copy-date-geo]").forEach((el) => {
         el.onclick = () => {
           document.getElementById("f-date").value = el.dataset.copyDateGeo;

@@ -52,7 +52,7 @@ function parseCalendarEvent(ev) {
   } else if (startDate) {
     date = startDate;
   }
-  return { date, time, title: ev.summary || "(Sans titre)" };
+  return { date, time, title: ev.summary || "(Sans titre)", description: ev.description || "" };
 }
 
 async function calendarFetchEvents(timeMinISO, timeMaxISO) {

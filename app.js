@@ -2,7 +2,7 @@
    Vues : Accueil / Agenda / Clients / Fiche client / Paramètres
    Toute la donnée passe par DB (db.js → IndexedDB). */
 
-const APP_VERSION = "1.28.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
+const APP_VERSION = "1.29.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
 
 const JOURS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
 const JOURS_COURT = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
@@ -54,6 +54,9 @@ function periodLabel(p) { return p === "matin" ? "Matin" : p === "apres-midi" ? 
 function clientFullName(c) {
   if (!c) return "";
   return c.prenom ? `${c.prenom} ${c.nom}` : c.nom;
+}
+function clientBadge(c) {
+  return (c && c.pastilleBleue) ? '<span class="badge-bleue" title="Client marqué"></span>' : "";
 }
 function clientInitials(c) {
   if (!c) return "?";
@@ -463,9 +466,10 @@ function renderRdvChip(r, clientMap) {
   const honore = r.statut === "honore";
   const typeClass = honore ? "is-honore" : (r.type === "entretien" ? "type-entretien" : "type-depannage");
   const period = periodLabel(r.periode);
+  const hasComment = c && c.commentaires;
   return `<button class="rdv-chip ${typeClass}" data-rdv-chip="${r.id}">
     ${honore ? '<span class="chip-period">✓ Honoré</span>' : (period ? `<span class="chip-period">${period}</span>` : "")}
-    <span class="chip-name">${escapeHtml(name)}</span>
+    <span class="chip-name">${hasComment ? '<span title="Commentaire client">⚠️</span> ' : ""}${clientBadge(c)}${escapeHtml(name)}</span>
     ${addr ? `<span class="chip-addr">📍 ${escapeHtml(addr)}</span>` : ""}
   </button>`;
 }
@@ -488,7 +492,7 @@ async function renderAgendaSearchHtml(query) {
   return matches.map(({ r, c }) => `
     <button class="near-item-block" data-goto-date="${r.date}">
       <span class="nib-date">${fmtDateFR(r.date)}</span>
-      <span class="nib-name">${escapeHtml(clientFullName(c))}</span>
+      <span class="nib-name">${clientBadge(c)}${escapeHtml(clientFullName(c))}</span>
       <span class="nib-addr">📍 ${escapeHtml(c.adresse || "")}</span>
     </button>
   `).join("");
@@ -597,7 +601,7 @@ async function runOptimize(dateISO, depart, forceFirstId, forceLastId) {
   let missing = 0;
   for (const r of rdvs) {
     const c = cmap[r.clientId];
-    if (c && c.lat != null) points.push({ id: r.id, lat: c.lat, lon: c.lon, name: clientFullName(c) });
+    if (c && c.lat != null) points.push({ id: r.id, lat: c.lat, lon: c.lon, name: clientFullName(c), badge: clientBadge(c) });
     else missing++;
   }
   if (points.length < 2) {
@@ -616,7 +620,7 @@ async function runOptimize(dateISO, depart, forceFirstId, forceLastId) {
   }
   for (const r of rdvs) if (r.ordre != null && points.some((p) => p.id === r.id)) await DB.saveRendezvous(r);
 
-  const names = result.order.map((id) => points.find((p) => p.id === id)?.name).filter(Boolean);
+  const names = result.order.map((id) => points.find((p) => p.id === id)).filter(Boolean).map((p) => `${p.badge}${escapeHtml(p.name)}`);
   const steps = depart ? ["Départ", ...names] : names;
 
   openSheet(`
@@ -624,7 +628,7 @@ async function runOptimize(dateISO, depart, forceFirstId, forceLastId) {
     ${missing > 0 ? `<p style="color:var(--smoke);font-size:12.5px;margin:-8px 0 12px;">${missing} client(s) non géocodé(s) ignoré(s) — ordre non garanti pour eux.</p>` : ""}
     ${result.estimated ? `<p style="color:var(--ember);font-size:12.5px;margin:-4px 0 12px;">⚠️ Calcul routier indisponible — estimation à vol d'oiseau.</p>` : ""}
     <div class="near-list">
-      ${steps.map((n, i) => `<div class="near-item"><span>${i + 1}. ${escapeHtml(n)}</span></div>`).join("")}
+      ${steps.map((n, i) => `<div class="near-item"><span>${i + 1}. ${n}</span></div>`).join("")}
     </div>
     <div class="info-row" style="margin-top:10px;"><span class="k">Distance totale</span><span class="v">${result.distanceKm.toFixed(1)} km</span></div>
     ${result.durationMin != null ? `<div class="info-row"><span class="k">Durée estimée</span><span class="v">${Math.round(result.durationMin)} min</span></div>` : ""}
@@ -709,7 +713,7 @@ function clientRowHtml(c) {
   return `<button class="client-row" data-client="${c.id}">
     <span class="client-avatar">${initials(c)}</span>
     <span>
-      <span class="cname">${escapeHtml(clientFullName(c))} ${c.lat != null ? '<span class="geo-dot" title="Adresse géocodée"></span>' : ""}</span>
+      <span class="cname">${clientBadge(c)}${escapeHtml(clientFullName(c))} ${c.lat != null ? '<span class="geo-dot" title="Adresse géocodée"></span>' : ""}</span>
       <span class="caddr">${escapeHtml(c.adresse || "Adresse non renseignée")}</span>
     </span>
     <span class="chevron">
@@ -751,7 +755,7 @@ async function renderFiche() {
 
   root.innerHTML = `
     <div class="fiche-head">
-      <p class="fname">${escapeHtml(clientFullName(c))}</p>
+      <p class="fname">${clientBadge(c)}${escapeHtml(clientFullName(c))}</p>
       <p class="faddr">${escapeHtml(c.adresse || "Adresse non renseignée")}</p>
       ${c.adresse ? (c.lat != null
         ? `<p class="geo-status geo-ok">📍 Adresse localisée <a href="https://www.openstreetmap.org/?mlat=${c.lat}&mlon=${c.lon}&zoom=17" target="_blank" rel="noopener" class="link-btn" style="text-decoration:underline;">Voir sur la carte</a></p>`
@@ -1861,6 +1865,7 @@ async function openClientForm(existing, onSaved) {
         <button type="button" data-val="non" class="${c.nouveauClient === "non" ? "active period-active" : ""}">Non</button>
       </div>
     </div>
+    <label class="chk" style="margin-top:12px;"><input type="checkbox" id="f-pastille" ${c.pastilleBleue ? "checked" : ""} /> Marquer ce client (pastille bleue visible partout)</label>
     <div class="form-row"><label>Téléphone</label><input type="tel" id="f-tel" value="${escapeAttr(c.telephone)}" /></div>
     <div class="form-row"><label>Téléphone secondaire (facultatif)</label><input type="tel" id="f-tel2" value="${escapeAttr(c.telephone2)}" /></div>
     <div class="form-row"><label>E-mail (facultatif)</label><input type="email" id="f-email" value="${escapeAttr(c.email)}" /></div>
@@ -1894,6 +1899,7 @@ async function openClientForm(existing, onSaved) {
       ...c,
       prenom, nom,
       nouveauClient: selCivilite,
+      pastilleBleue: document.getElementById("f-pastille").checked,
       telephone: document.getElementById("f-tel").value.trim(),
       telephone2: document.getElementById("f-tel2").value.trim(),
       email: document.getElementById("f-email").value.trim(),
@@ -2150,7 +2156,7 @@ async function openRdvForm(prefill = {}, existing) {
 
   function updateSelectedDisplay() {
     const c = clients.find((x) => x.id === selectedClientId);
-    selectedEl.innerHTML = c ? `<div class="client-picker-chip">${escapeHtml(clientFullName(c))}</div>` : `<div class="near-hint">Aucun client sélectionné</div>`;
+    selectedEl.innerHTML = c ? `<div class="client-picker-chip">${clientBadge(c)}${escapeHtml(clientFullName(c))}</div>` : `<div class="near-hint">Aucun client sélectionné</div>`;
     const commentEl = document.getElementById("f-client-comment");
     if (commentEl) {
       commentEl.innerHTML = (c && c.commentaires)
@@ -2165,7 +2171,7 @@ async function openRdvForm(prefill = {}, existing) {
     if (!q) { resultsEl.innerHTML = ""; return; }
     const matches = clients.filter((c) => clientFullName(c).toLowerCase().includes(q)).slice(0, 6);
     resultsEl.innerHTML = matches.length
-      ? matches.map((c) => `<button type="button" class="client-picker-item" data-cid="${c.id}">${escapeHtml(clientFullName(c))}</button>`).join("")
+      ? matches.map((c) => `<button type="button" class="client-picker-item" data-cid="${c.id}">${clientBadge(c)}${escapeHtml(clientFullName(c))}</button>`).join("")
       : `<p class="near-hint">Aucun client trouvé.</p>`;
     resultsEl.querySelectorAll("[data-cid]").forEach((btn) => {
       btn.onclick = () => {
@@ -2344,9 +2350,10 @@ async function openRdvDetail(id) {
   const period = periodLabel(r.periode);
 
   openSheet(`
-    <h2>${client ? escapeHtml(clientFullName(client)) : "Rendez-vous"}</h2>
+    <h2>${client ? clientBadge(client) + escapeHtml(clientFullName(client)) : "Rendez-vous"}</h2>
     <p style="color:var(--smoke);font-size:13px;margin:-10px 0 4px;">${fmtDateFR(r.date)}${period ? " · " + period : ""} · ${r.type === "entretien" ? "Entretien" : "Dépannage"}${r.statut === "honore" ? " · <span style=\"color:var(--moss);font-weight:600;\">✓ Honoré</span>" : ""}</p>
     ${addr ? `<p style="font-size:13.5px;color:var(--ink-dim);margin:0 0 4px;">📍 ${escapeHtml(addr)}</p>` : ""}
+    ${client && client.commentaires ? `<p style="font-size:13.5px;color:var(--ember);background:var(--ember-wash);border-radius:9px;padding:9px 11px;margin:6px 0;">⚠️ ${escapeHtml(client.commentaires)}</p>` : ""}
     ${r.statut === "honore" ? `<p style="font-size:13.5px;color:var(--ink-dim);margin:0 0 4px;">📝 ${(r.paiement ? formatPaiementLines(r.paiement) : (r.compteRenduHonore ? [r.compteRenduHonore] : ["⚠️ Paiement non renseigné"])).map(escapeHtml).join(" — ")}</p>` : (r.commentaire ? `<p style="font-size:13.5px;color:var(--ink-dim);margin:0 0 4px;">${escapeHtml(r.commentaire)}</p>` : "")}
 
     <div class="quick-actions">
@@ -2398,7 +2405,7 @@ async function openHonoreForm(r, client) {
 
   openSheet(`
     <h2>RDV honoré</h2>
-    <p style="color:var(--smoke);font-size:13px;margin:-8px 0 14px;">${client ? escapeHtml(clientFullName(client)) : ""} — ${fmtDateFR(r.date)}</p>
+    <p style="color:var(--smoke);font-size:13px;margin:-8px 0 14px;">${client ? clientBadge(client) + escapeHtml(clientFullName(client)) : ""} — ${fmtDateFR(r.date)}</p>
     <p style="font-size:13.5px;color:var(--ink-dim);margin:0 0 14px;">Ce rendez-vous sera ajouté à l'historique du client.</p>
     <div class="form-row">
       <label>Mode de paiement</label>

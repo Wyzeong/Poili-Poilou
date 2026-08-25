@@ -2,7 +2,7 @@
    Vues : Accueil / Agenda / Clients / Fiche client / Paramètres
    Toute la donnée passe par DB (db.js → IndexedDB). */
 
-const APP_VERSION = "1.22.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
+const APP_VERSION = "1.25.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
 
 const JOURS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
 const JOURS_COURT = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
@@ -787,6 +787,8 @@ async function renderFiche() {
       </div>
     </div>
 
+    <button class="btn-secondary" id="share-client-btn" style="width:100%;margin-bottom:10px;">Partager la fiche</button>
+
     <div class="sheet-actions" style="margin-bottom:16px;">
       <button class="btn-secondary" id="edit-client-btn">Modifier la fiche</button>
       <button class="btn-danger" id="del-client-btn">Supprimer</button>
@@ -794,6 +796,7 @@ async function renderFiche() {
   `;
 
   document.getElementById("qa-rdv").onclick = () => openRdvForm({ clientId: c.id });
+  document.getElementById("share-client-btn").onclick = () => openClientShare(c, historique);
   document.getElementById("edit-client-btn").onclick = () => openClientForm(c);
   document.getElementById("del-client-btn").onclick = () => confirmDeleteClient(c);
 
@@ -855,6 +858,94 @@ async function renderFiche() {
   });
 }
 
+// ---------- Partage d'une fiche client (SMS / e-mail / partage natif) ----------
+function buildClientShareText(c, historique) {
+  const lines = [`Fiche client — ${clientFullName(c)}`, ""];
+  if (c.adresse) lines.push(`Adresse : ${c.adresse}`);
+  if (c.telephone) lines.push(`Téléphone : ${c.telephone}`);
+  if (c.telephone2) lines.push(`Téléphone secondaire : ${c.telephone2}`);
+  if (c.email) lines.push(`E-mail : ${c.email}`);
+  lines.push(`Nouveau client : ${nouveauClientLabel(c)}`);
+
+  if (c.marque || c.modele || c.infosComplementaires) {
+    lines.push("", "Installation");
+    if (c.marque) lines.push(`Marque : ${c.marque}`);
+    if (c.modele) lines.push(`Modèle : ${c.modele}`);
+    if (c.infosComplementaires) lines.push(`Infos : ${c.infosComplementaires}`);
+  }
+
+  if (c.commentaires) lines.push("", "Commentaires", c.commentaires);
+
+  lines.push("", "Historique des interventions");
+  if (!historique || historique.length === 0) {
+    lines.push("Aucune intervention enregistrée.");
+  } else {
+    historique.forEach((h) => {
+      const typeLabel = h.type === "entretien" ? "Entretien" : "Dépannage";
+      lines.push(`- ${fmtDateFR(h.date)} — ${typeLabel}${h.description ? " : " + h.description : ""}`);
+    });
+  }
+  return lines.join("\n");
+}
+
+function collectClientPhotos(c, historique) {
+  const photos = [];
+  const safeName = clientFullName(c).replace(/[^\wÀ-ÿ-]+/g, "-");
+  (c.photos || []).forEach((src, i) => photos.push({ src, name: `${safeName}-${i + 1}.jpg` }));
+  (historique || []).forEach((h) => {
+    (h.photos || []).forEach((src, i) => photos.push({ src, name: `${safeName}-${h.date}-${i + 1}.jpg` }));
+  });
+  return photos;
+}
+
+async function dataUrlToFile(dataUrl, filename) {
+  const res = await fetch(dataUrl);
+  const blob = await res.blob();
+  return new File([blob], filename, { type: blob.type || "image/jpeg" });
+}
+
+async function openClientShare(c, historique) {
+  const text = buildClientShareText(c, historique);
+  const photos = collectClientPhotos(c, historique);
+  const canNativeShare = typeof navigator.share === "function";
+
+  openSheet(`
+    <h2>Partager la fiche</h2>
+    <p class="near-hint" style="margin:0 0 14px;">Coordonnées, installation, commentaires et historique complet${photos.length ? ` (+ ${photos.length} photo${photos.length > 1 ? "s" : ""})` : ""}.</p>
+    ${canNativeShare ? `<button class="btn-primary" id="share-native-btn" style="width:100%;margin-bottom:12px;">Partager${photos.length ? " (avec les photos)" : ""}</button>` : ""}
+    <div class="sheet-actions" style="margin-top:0;">
+      <button class="btn-secondary" id="share-sms-btn">Par SMS</button>
+      <button class="btn-secondary" id="share-email-btn">Par e-mail</button>
+    </div>
+    ${photos.length ? '<p class="near-hint" style="margin-top:12px;">Par SMS ou e-mail classique, seul le texte part — les photos ne peuvent pas être jointes de cette façon (limite du téléphone). Utilise "Partager" ci-dessus pour les inclure.</p>' : ""}
+  `);
+
+  const nativeBtn = document.getElementById("share-native-btn");
+  if (nativeBtn) {
+    nativeBtn.onclick = async () => {
+      try {
+        const shareData = { title: `Fiche client — ${clientFullName(c)}`, text };
+        if (photos.length) {
+          const files = await Promise.all(photos.map((p) => dataUrlToFile(p.src, p.name)));
+          if (navigator.canShare && navigator.canShare({ files })) shareData.files = files;
+        }
+        await navigator.share(shareData);
+        closeSheet();
+      } catch (e) {
+        if (e.name !== "AbortError") toast("Partage impossible : " + e.message);
+      }
+    };
+  }
+  document.getElementById("share-sms-btn").onclick = () => {
+    window.location.href = `sms:?body=${encodeURIComponent(text)}`;
+    closeSheet();
+  };
+  document.getElementById("share-email-btn").onclick = () => {
+    window.location.href = `mailto:?subject=${encodeURIComponent("Fiche client — " + clientFullName(c))}&body=${encodeURIComponent(text)}`;
+    closeSheet();
+  };
+}
+
 // ---------- Paramètres ----------
 async function renderReglages() {
   const retourDepart = await DB.getParam("retourDepart", false);
@@ -904,6 +995,13 @@ async function renderReglages() {
     </div>
 
     <div class="info-block">
+      <h3>Ajouter un fichier à Drive</h3>
+      <p style="font-size:13.5px;color:var(--smoke);margin:0 0 12px;">Pour un fichier de sauvegarde reçu autrement que par Drive (par exemple par e-mail) : il est envoyé vers ton Drive, puis s'importe exactement comme une sauvegarde normale via "Importer depuis Drive" ci-dessus.</p>
+      <input type="file" accept="application/json" id="local-import-file" hidden />
+      <button class="btn-secondary" id="local-import-btn" style="width:100%;">Choisir un fichier</button>
+    </div>
+
+    <div class="info-block">
       <h3>Google Agenda (lecture seule)</h3>
       <div id="calendar-status"></div>
     </div>
@@ -944,6 +1042,30 @@ async function renderReglages() {
 
   await renderDriveStatus();
   await renderCalendarStatus();
+
+  const localImportInput = document.getElementById("local-import-file");
+  document.getElementById("local-import-btn").onclick = () => localImportInput.click();
+  localImportInput.onchange = async () => {
+    const file = localImportInput.files[0];
+    if (!file) return;
+    localImportInput.value = ""; // permet de resélectionner le même fichier plus tard si besoin
+
+    const connected = await isDriveConnected();
+    if (!connected) {
+      toast("Connecte d'abord Google Drive ci-dessus");
+      return;
+    }
+    try {
+      const text = await file.text();
+      JSON.parse(text); // vérifie que c'est bien un JSON valide avant l'envoi
+      toast("Envoi vers Drive…");
+      await driveUploadBackup(text);
+      toast("Envoyé sur Drive ✓ — choisis-le pour l'importer");
+      openBackupPicker();
+    } catch (e) {
+      toast("Échec : " + e.message);
+    }
+  };
 }
 
 async function buildBackupPayload() {

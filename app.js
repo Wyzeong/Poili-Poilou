@@ -2,7 +2,7 @@
    Vues : Accueil / Agenda / Clients / Fiche client / Réglages
    Toute la donnée passe par DB (db.js → IndexedDB). */
 
-const APP_VERSION = "1.32.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
+const APP_VERSION = "1.32.1"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
 
 const JOURS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
 const JOURS_COURT = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];

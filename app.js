@@ -2,7 +2,7 @@
    Vues : Accueil / Agenda / Clients / Fiche client / Paramètres
    Toute la donnée passe par DB (db.js → IndexedDB). */
 
-const APP_VERSION = "1.29.1"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
+const APP_VERSION = "1.30.2"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
 
 const JOURS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
 const JOURS_COURT = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
@@ -391,6 +391,7 @@ async function refreshAgendaBody() {
   const clients = await DB.listClients();
   const clientMap = Object.fromEntries(clients.map((c) => [c.id, c]));
   const today = new Date();
+  const domicile = await getDomicileCoords();
 
   let html = `
     <div class="week-nav">
@@ -428,9 +429,8 @@ async function refreshAgendaBody() {
         <svg viewBox="0 0 24 24" width="13" height="13"><path fill="currentColor" d="M12 2c1 3-1 4-1 6 0 1.2 1 2 2 2 1.3 0 2-1 2-2.2 1.6 1.4 3 3.7 3 6.2a6 6 0 0 1-12 0c0-2.6 1.1-4.3 2.3-6C9.2 6.3 10.5 4.4 12 2Z"/></svg>
         Optimiser
       </button>` : ""}
-      ${items.length === 0
-        ? `<button class="day-col-add" data-add="${iso}">+</button>`
-        : items.map((r) => renderRdvChip(r, clientMap)).join("")}
+      ${items.map((r) => renderRdvChip(r, clientMap, domicile)).join("")}
+      <button class="day-col-add" data-add="${iso}">+</button>
     </div>`;
   }
 
@@ -459,16 +459,28 @@ async function refreshAgendaBody() {
   });
 }
 
-function renderRdvChip(r, clientMap) {
+function renderRdvChip(r, clientMap, domicile) {
   const c = clientMap[r.clientId];
   const name = c ? clientFullName(c) : "Client supprimé";
   const addr = c ? c.adresse : (r.adresse || "");
   const honore = r.statut === "honore";
-  const typeClass = honore ? "is-honore" : (r.type === "entretien" ? "type-entretien" : "type-depannage");
   const period = periodLabel(r.periode);
   const hasComment = c && c.commentaires;
-  return `<button class="rdv-chip ${typeClass}" data-rdv-chip="${r.id}">
-    ${honore ? '<span class="chip-period">✓ Honoré</span>' : (period ? `<span class="chip-period">${period}</span>` : "")}
+
+  let distClass = "";
+  if (!honore && domicile && c && c.lat != null) {
+    const d = haversineKm(domicile.lat, domicile.lon, c.lat, c.lon);
+    distClass = d <= 10 ? "dist-green" : d <= 15 ? "dist-orange" : "dist-red";
+  }
+  const chipClass = honore ? "is-honore" : distClass;
+  const typeBadgeClass = r.type === "entretien" ? "type-badge-entretien" : "type-badge-depannage";
+  const typeBadgeLabel = r.type === "entretien" ? "Entretien" : "Dépannage";
+
+  return `<button class="rdv-chip ${chipClass}" data-rdv-chip="${r.id}">
+    <div class="chip-top-row">
+      <span class="type-badge ${typeBadgeClass}">${typeBadgeLabel}</span>
+      ${honore ? '<span class="chip-period">✓ Honoré</span>' : (period ? `<span class="chip-period">${period}</span>` : "")}
+    </div>
     <span class="chip-name">${hasComment ? '<span title="Commentaire client">⚠️</span> ' : ""}${clientBadge(c)}${escapeHtml(name)}</span>
     ${addr ? `<span class="chip-addr">📍 ${escapeHtml(addr)}</span>` : ""}
   </button>`;
@@ -1400,7 +1412,7 @@ const IMPORT_RANGE_END = "2028-01-01T00:00:00Z"; // couvre 2024 à 2027 inclus
 // médicaux, loisirs, administratif...). Comparaison insensible aux accents et à la casse.
 const IMPORT_EXCLUDED_KEYWORDS = [
   "anniversaire", "cardiologue", "docteur", "coiffeur", "coiffeuse", "comptabilite",
-  "comportementaliste", "vacance", "examen", "sport", "revision", "renault",
+  "comportementaliste", "vacance", "examen", "sport", "revision",
   "reunion", "rdv", "petel", "kine",
 ];
 
@@ -2174,7 +2186,11 @@ async function openRdvForm(prefill = {}, existing) {
     if (!q) { resultsEl.innerHTML = ""; return; }
     const matches = clients.filter((c) => clientFullName(c).toLowerCase().includes(q)).slice(0, 6);
     resultsEl.innerHTML = matches.length
-      ? matches.map((c) => `<button type="button" class="client-picker-item" data-cid="${c.id}">${clientBadge(c)}${escapeHtml(clientFullName(c))}</button>`).join("")
+      ? matches.map((c) => `<button type="button" class="client-picker-item" data-cid="${c.id}">
+          <span class="cpi-name">${clientBadge(c)}${escapeHtml(clientFullName(c))}</span>
+          ${c.adresse ? `<span class="cpi-detail">📍 ${escapeHtml(c.adresse)}</span>` : ""}
+          ${c.telephone ? `<span class="cpi-detail">📞 ${escapeHtml(c.telephone)}</span>` : ""}
+        </button>`).join("")
       : `<p class="near-hint">Aucun client trouvé.</p>`;
     resultsEl.querySelectorAll("[data-cid]").forEach((btn) => {
       btn.onclick = () => {

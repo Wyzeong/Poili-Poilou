@@ -2,7 +2,7 @@
    Vues : Accueil / Agenda / Clients / Fiche client / Réglages
    Toute la donnée passe par DB (db.js → IndexedDB). */
 
-const APP_VERSION = "1.34.3"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
+const APP_VERSION = "1.34.5"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
 
 const JOURS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
 const JOURS_COURT = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
@@ -2126,8 +2126,7 @@ async function renderNearbyHtml(clientId, dateISO, excludeRdvId, radiusKm, horiz
       return { date: r.date, name: clientFullName(rc), distKm: haversineKm(client.lat, client.lon, rc.lat, rc.lon) };
     })
     .filter((x) => x && x.distKm <= radiusKm)
-    .sort((a, b) => a.distKm - b.distKm)
-    .slice(0, 5);
+    .sort((a, b) => a.distKm - b.distKm);
 
   if (withDist.length === 0) {
     return wrap(`<p class="near-hint">Aucun rendez-vous trouvé à moins de ${radiusKm} km dans les ${horizonMonths} prochains mois.</p>`);
@@ -2157,8 +2156,7 @@ async function computeNearbyByPosition(coords, horizonDays, radiusKm = 20) {
       return { date: r.date, name: clientFullName(c), distKm: haversineKm(coords.lat, coords.lon, c.lat, c.lon) };
     })
     .filter((x) => x && x.distKm <= radiusKm)
-    .sort((a, b) => a.distKm - b.distKm)
-    .slice(0, 8);
+    .sort((a, b) => a.distKm - b.distKm);
 }
 
 // ---------- Formulaire rendez-vous ----------

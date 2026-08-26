@@ -879,3 +879,14 @@ input[type="checkbox"] { accent-color: var(--ember); width: 18px; height: 18px; 
   .topbar-inner { padding-top: 8px; padding-bottom: 8px; }
   .topbar-compact .topbar-inner { padding-top: 6px; padding-bottom: 6px; }
 }
+
+/* ---------- Agenda : animation de glissement entre semaines ---------- */
+#agenda-body { will-change: transform, opacity; }
+.agenda-slide-out-left { animation: agendaSlideOutLeft 0.14s ease-in forwards; }
+.agenda-slide-out-right { animation: agendaSlideOutRight 0.14s ease-in forwards; }
+.agenda-slide-in-left { animation: agendaSlideInLeft 0.22s ease-out; }
+.agenda-slide-in-right { animation: agendaSlideInRight 0.22s ease-out; }
+@keyframes agendaSlideOutLeft { to { transform: translateX(-28px); opacity: 0; } }
+@keyframes agendaSlideOutRight { to { transform: translateX(28px); opacity: 0; } }
+@keyframes agendaSlideInLeft { from { transform: translateX(28px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+@keyframes agendaSlideInRight { from { transform: translateX(-28px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }

@@ -2,7 +2,7 @@
    Vues : Accueil / Agenda / Clients / Fiche client / Réglages
    Toute la donnée passe par DB (db.js → IndexedDB). */
 
-const APP_VERSION = "1.34.1"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
+const APP_VERSION = "1.34.3"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
 
 const JOURS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
 const JOURS_COURT = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
@@ -334,23 +334,6 @@ async function renderAgenda() {
   input.oninput = () => { state.agendaSearch = input.value; refreshAgendaBody(); };
   await renderCalendarSyncStatusLine();
   await refreshAgendaBody();
-
-  // Glissement horizontal pour changer de semaine (ignoré si la recherche est active,
-  // et ignoré si le geste est surtout vertical, pour ne pas gêner le défilement normal).
-  const body = document.getElementById("agenda-body");
-  let touchStartX = 0, touchStartY = 0;
-  body.addEventListener("touchstart", (e) => {
-    touchStartX = e.touches[0].clientX;
-    touchStartY = e.touches[0].clientY;
-  }, { passive: true });
-  body.addEventListener("touchend", (e) => {
-    if (state.agendaSearch.trim()) return;
-    const dx = e.changedTouches[0].clientX - touchStartX;
-    const dy = e.changedTouches[0].clientY - touchStartY;
-    if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
-    state.weekStart = addDays(state.weekStart, dx < 0 ? 7 : -7);
-    refreshAgendaBody();
-  }, { passive: true });
 }
 
 function fmtRelativeTime(iso) {
@@ -382,6 +365,23 @@ async function renderCalendarSyncStatusLine() {
     await renderCalendarSyncStatusLine();
     await refreshAgendaBody();
   };
+}
+
+// Change de semaine avec une petite animation de glissement (le contenu actuel sort
+// d'un côté, le nouveau entre de l'autre), utilisée par le swipe et par les flèches.
+function changeWeek(days) {
+  const body = document.getElementById("agenda-body");
+  if (!body) { state.weekStart = addDays(state.weekStart, days); refreshAgendaBody(); return; }
+  const dir = days > 0 ? "left" : "right";
+  body.classList.add(`agenda-slide-out-${dir}`);
+  setTimeout(() => {
+    state.weekStart = addDays(state.weekStart, days);
+    body.classList.remove(`agenda-slide-out-${dir}`);
+    refreshAgendaBody().then(() => {
+      body.classList.add(`agenda-slide-in-${dir}`);
+      setTimeout(() => body.classList.remove(`agenda-slide-in-${dir}`), 220);
+    });
+  }, 140);
 }
 
 async function refreshAgendaBody() {
@@ -461,8 +461,8 @@ async function refreshAgendaBody() {
   html += `</div>`;
   container.innerHTML = html;
 
-  document.getElementById("week-prev").onclick = () => { state.weekStart = addDays(state.weekStart, -7); refreshAgendaBody(); };
-  document.getElementById("week-next").onclick = () => { state.weekStart = addDays(state.weekStart, 7); refreshAgendaBody(); };
+  document.getElementById("week-prev").onclick = () => changeWeek(-7);
+  document.getElementById("week-next").onclick = () => changeWeek(7);
   document.getElementById("week-today").onclick = () => { state.weekStart = startOfWeek(new Date()); refreshAgendaBody(); };
   const jumpInput = document.getElementById("week-jump-input");
   document.getElementById("week-jump-btn").onclick = () => { jumpInput.showPicker ? jumpInput.showPicker() : jumpInput.focus(); };
@@ -1888,6 +1888,25 @@ function closeSheet() {
   sheetContent.innerHTML = "";
 }
 sheetBackdrop.onclick = closeSheet;
+
+// Glissement horizontal sur toute la vue Agenda pour changer de semaine (écouté une
+// seule fois sur le conteneur principal, qui couvre toujours toute la hauteur visible
+// — contrairement au contenu de l'agenda qui peut être court certaines semaines).
+(() => {
+  let touchStartX = 0, touchStartY = 0;
+  root.addEventListener("touchstart", (e) => {
+    if (state.view !== "agenda") return;
+    touchStartX = e.touches[0].clientX;
+    touchStartY = e.touches[0].clientY;
+  }, { passive: true });
+  root.addEventListener("touchend", (e) => {
+    if (state.view !== "agenda" || state.agendaSearch.trim()) return;
+    const dx = e.changedTouches[0].clientX - touchStartX;
+    const dy = e.changedTouches[0].clientY - touchStartY;
+    if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+    changeWeek(dx < 0 ? 7 : -7);
+  }, { passive: true });
+})();
 
 // ---------- FAB : choix rapide ----------
 document.getElementById("fab-add").onclick = () => {

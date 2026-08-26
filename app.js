@@ -2,7 +2,7 @@
    Vues : Accueil / Agenda / Clients / Fiche client / Réglages
    Toute la donnée passe par DB (db.js → IndexedDB). */
 
-const APP_VERSION = "1.33.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
+const APP_VERSION = "1.34.1"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
 
 const JOURS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
 const JOURS_COURT = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
@@ -334,6 +334,23 @@ async function renderAgenda() {
   input.oninput = () => { state.agendaSearch = input.value; refreshAgendaBody(); };
   await renderCalendarSyncStatusLine();
   await refreshAgendaBody();
+
+  // Glissement horizontal pour changer de semaine (ignoré si la recherche est active,
+  // et ignoré si le geste est surtout vertical, pour ne pas gêner le défilement normal).
+  const body = document.getElementById("agenda-body");
+  let touchStartX = 0, touchStartY = 0;
+  body.addEventListener("touchstart", (e) => {
+    touchStartX = e.touches[0].clientX;
+    touchStartY = e.touches[0].clientY;
+  }, { passive: true });
+  body.addEventListener("touchend", (e) => {
+    if (state.agendaSearch.trim()) return;
+    const dx = e.changedTouches[0].clientX - touchStartX;
+    const dy = e.changedTouches[0].clientY - touchStartY;
+    if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+    state.weekStart = addDays(state.weekStart, dx < 0 ? 7 : -7);
+    refreshAgendaBody();
+  }, { passive: true });
 }
 
 function fmtRelativeTime(iso) {
@@ -848,7 +865,7 @@ async function renderFiche() {
     <div class="info-block">
       <h3>Photos</h3>
       <div id="client-photos-grid">${photoGridHtml(c.photos, true)}</div>
-      <input type="file" accept="image/*" capture="environment" multiple id="client-photo-input" hidden />
+      <input type="file" accept="image/*" multiple id="client-photo-input" hidden />
       <button class="btn-secondary" id="client-photo-add-btn" style="width:100%;margin-top:8px;">+ Ajouter une photo</button>
     </div>
 
@@ -1108,14 +1125,37 @@ async function computeBrandStats() {
   });
 
   const results = clusters.map((cl) => {
-    if (BRAND_GROUP_LABELS[cl.key]) return { label: BRAND_GROUP_LABELS[cl.key], count: cl.count };
+    const rawLabels = Array.from(cl.labels.keys());
+    if (BRAND_GROUP_LABELS[cl.key]) return { label: BRAND_GROUP_LABELS[cl.key], count: cl.count, rawLabels };
     let bestLabel = "", bestCount = -1;
     cl.labels.forEach((c, label) => { if (c > bestCount) { bestCount = c; bestLabel = label; } });
-    return { label: bestLabel.toUpperCase(), count: cl.count };
+    return { label: bestLabel.toUpperCase(), count: cl.count, rawLabels };
   }).sort((a, b) => b.count - a.count);
 
   const total = results.reduce((s, r) => s + r.count, 0);
   return { results, total };
+}
+
+async function openBrandClientsList(label, rawLabels) {
+  const clients = await DB.listClients();
+  const set = new Set(rawLabels);
+  const matches = clients
+    .filter((c) => set.has((c.marque || "").trim()))
+    .sort((a, b) => clientFullName(a).localeCompare(clientFullName(b)));
+
+  openSheet(`
+    <h2>${escapeHtml(label)}</h2>
+    <p class="near-hint" style="margin:-6px 0 14px;">${matches.length} client${matches.length > 1 ? "s" : ""}</p>
+    ${matches.length === 0 ? '<p class="near-hint">Aucun client trouvé.</p>' : matches.map((c) => `
+      <button type="button" class="client-picker-item" data-cid="${c.id}">
+        <span class="cpi-name">${clientBadge(c)}${escapeHtml(clientFullName(c))}</span>
+        ${c.adresse ? `<span class="cpi-detail">📍 ${escapeHtml(c.adresse)}</span>` : ""}
+      </button>
+    `).join("")}
+  `);
+  sheetContent.querySelectorAll("[data-cid]").forEach((el) => {
+    el.onclick = () => { closeSheet(); navigate("fiche", el.dataset.cid); };
+  });
 }
 
 async function renderBrandStats() {
@@ -1126,20 +1166,24 @@ async function renderBrandStats() {
     el.innerHTML = '<p class="near-hint">Aucune marque renseignée pour l\'instant sur les fiches clients.</p>';
     return;
   }
-  el.innerHTML = results.map((r) => {
+  el.innerHTML = results.map((r, i) => {
     const pct = ((r.count / total) * 100).toFixed(1);
     return `
-      <div style="margin-bottom:11px;">
-        <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px;">
+      <button type="button" class="brand-stat-row" data-idx="${i}" style="display:block;width:100%;text-align:left;background:none;border:none;padding:0;margin-bottom:11px;cursor:pointer;">
+        <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px;color:var(--ink);">
           <span>${escapeHtml(r.label)}</span>
           <span style="color:var(--smoke);font-family:var(--font-mono);">${r.count} · ${pct}%</span>
         </div>
         <div style="background:var(--surface-2);border-radius:6px;height:10px;overflow:hidden;">
           <div style="background:var(--ember);height:100%;width:${pct}%;"></div>
         </div>
-      </div>
+      </button>
     `;
   }).join("");
+  el.querySelectorAll(".brand-stat-row").forEach((btn) => {
+    const r = results[parseInt(btn.dataset.idx, 10)];
+    btn.onclick = () => openBrandClientsList(r.label, r.rawLabels);
+  });
 }
 
 // ---------- Réglages ----------
@@ -2473,7 +2517,7 @@ async function openHonoreForm(r, client) {
     <div class="form-row">
       <label>Photos (facultatif)</label>
       <div id="honore-photos-grid"></div>
-      <input type="file" accept="image/*" capture="environment" multiple id="honore-photo-input" hidden />
+      <input type="file" accept="image/*" multiple id="honore-photo-input" hidden />
       <button type="button" class="btn-secondary" id="honore-photo-add-btn" style="width:100%;margin-top:8px;">+ Ajouter une photo</button>
     </div>
     <div class="sheet-actions">

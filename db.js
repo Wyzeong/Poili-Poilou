@@ -85,10 +85,11 @@ const DB = {
   },
   async searchClients(query) {
     const all = await this.listClients();
-    const q = (query || "").trim().toLowerCase();
+    const normalize = (s) => (s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+    const q = normalize(query);
     if (!q) return all;
     return all.filter((c) => {
-      const hay = [c.nom, c.prenom, c.adresse, c.telephone].filter(Boolean).join(" ").toLowerCase();
+      const hay = normalize([c.nom, c.prenom, c.adresse, c.telephone].filter(Boolean).join(" "));
       return hay.includes(q);
     });
   },

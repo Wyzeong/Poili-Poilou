@@ -2,7 +2,7 @@
    Vues : Accueil / Agenda / Clients / Fiche client / Paramètres
    Toute la donnée passe par DB (db.js → IndexedDB). */
 
-const APP_VERSION = "1.30.2"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
+const APP_VERSION = "1.31.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
 
 const JOURS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
 const JOURS_COURT = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
@@ -488,14 +488,14 @@ function renderRdvChip(r, clientMap, domicile) {
 
 async function renderAgendaSearchHtml(query) {
   const todayISO = toISO(new Date());
-  const q = query.toLowerCase();
+  const q = normalizeForMatch(query);
   const all = (await DB.listRendezvous()).filter((r) => r.date >= todayISO);
   const clients = await DB.listClients();
   const cmap = Object.fromEntries(clients.map((c) => [c.id, c]));
 
   const matches = all
     .map((r) => ({ r, c: cmap[r.clientId] }))
-    .filter((x) => x.c && clientFullName(x.c).toLowerCase().includes(q))
+    .filter((x) => x.c && normalizeForMatch(clientFullName(x.c)).includes(q))
     .sort((a, b) => a.r.date.localeCompare(b.r.date));
 
   if (matches.length === 0) {
@@ -2182,9 +2182,9 @@ async function openRdvForm(prefill = {}, existing) {
   updateSelectedDisplay();
 
   searchInput.oninput = () => {
-    const q = searchInput.value.trim().toLowerCase();
+    const q = normalizeForMatch(searchInput.value.trim());
     if (!q) { resultsEl.innerHTML = ""; return; }
-    const matches = clients.filter((c) => clientFullName(c).toLowerCase().includes(q)).slice(0, 6);
+    const matches = clients.filter((c) => normalizeForMatch(clientFullName(c)).includes(q)).slice(0, 6);
     resultsEl.innerHTML = matches.length
       ? matches.map((c) => `<button type="button" class="client-picker-item" data-cid="${c.id}">
           <span class="cpi-name">${clientBadge(c)}${escapeHtml(clientFullName(c))}</span>

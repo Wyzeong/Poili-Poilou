@@ -1,8 +1,8 @@
 /* app.js — SPA légère, sans framework, 100% locale.
-   Vues : Accueil / Agenda / Clients / Fiche client / Paramètres
+   Vues : Accueil / Agenda / Clients / Fiche client / Réglages
    Toute la donnée passe par DB (db.js → IndexedDB). */
 
-const APP_VERSION = "1.31.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
+const APP_VERSION = "1.32.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
 
 const JOURS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
 const JOURS_COURT = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
@@ -138,6 +138,8 @@ async function render() {
   });
   btnBack.hidden = state.view === "accueil";
   btnBack.onclick = () => history.back();
+  const topbar = document.getElementById("topbar");
+  if (topbar) topbar.classList.toggle("topbar-compact", state.view !== "accueil");
 
   if (state.view === "accueil") await renderAccueil();
   else if (state.view === "agenda") await renderAgenda();
@@ -185,7 +187,7 @@ async function renderAccueil() {
       <button class="home-btn" data-nav="reglages">
         <span class="hb-icon"><svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M19.4 13a7.5 7.5 0 0 0 0-2l2-1.6-2-3.4-2.4 1a7.6 7.6 0 0 0-1.7-1L15 3h-4l-.3 2.5a7.6 7.6 0 0 0-1.7 1l-2.4-1-2 3.4L6.6 11a7.5 7.5 0 0 0 0 2l-2 1.6 2 3.4 2.4-1a7.6 7.6 0 0 0 1.7 1L11 21h4l.3-2.5a7.6 7.6 0 0 0 1.7-1l2.4 1 2-3.4-2-1.6zM13 15.5A3.5 3.5 0 1 1 13 8.5a3.5 3.5 0 0 1 0 7z"/></svg></span>
         <span class="hb-text">
-          <span class="hb-title">Paramètres</span>
+          <span class="hb-title">Réglages</span>
           <span class="hb-sub">Version, sauvegarde, point de départ</span>
         </span>
         <svg class="hb-chev" viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -271,7 +273,7 @@ function currentRecapRange() {
 async function openRecapHonores() {
   const recapEmail = await DB.getParam("recapEmail", "");
   if (!recapEmail) {
-    toast("Renseigne d'abord une adresse e-mail dans Paramètres");
+    toast("Renseigne d'abord une adresse e-mail dans Réglages");
     navigate("reglages");
     return;
   }
@@ -317,7 +319,7 @@ async function maybeStaleCalendarWarning() {
   const lastShown = await DB.getParam("lastStaleCalendarWarningDate", null);
   if (lastShown === todayISO) return;
   await DB.setParam("lastStaleCalendarWarningDate", todayISO);
-  toast("⚠️ Google Agenda pas synchronisé depuis plus de 48h — vérifie ta connexion dans Paramètres.");
+  toast("⚠️ Google Agenda pas synchronisé depuis plus de 48h — vérifie ta connexion dans Réglages.");
 }
 
 // ---------- Vue Agenda (colonnes semaine, façon Google Agenda) ----------
@@ -418,6 +420,9 @@ async function refreshAgendaBody() {
     const items = (byDate[iso] || []).slice().sort((a, b) => (a.ordre ?? 0) - (b.ordre ?? 0));
     const pendingCount = items.filter((r) => r.statut !== "honore").length;
     const calEvents = await getCalendarEventsForDate(iso);
+    const matinItems = items.filter((r) => r.periode === "matin");
+    const apremItems = items.filter((r) => r.periode === "apres-midi");
+    const autresItems = items.filter((r) => r.periode !== "matin" && r.periode !== "apres-midi");
 
     html += `<div class="day-col ${isToday ? "is-today" : ""}">
       <div class="day-col-head">
@@ -425,11 +430,12 @@ async function refreshAgendaBody() {
         <div class="dnum">${d.getDate()}</div>
       </div>
       ${calEvents.map((ev) => `<div class="cal-chip">📅 ${ev.time ? escapeHtml(ev.time) + " · " : ""}${escapeHtml(ev.title)}</div>`).join("")}
-      ${pendingCount >= 2 ? `<button class="day-col-optimize" data-optimize="${iso}">
+      ${pendingCount >= 2 ? `<button class="day-col-optimize" data-optimize="${iso}" title="Optimiser les trajets">
         <svg viewBox="0 0 24 24" width="13" height="13"><path fill="currentColor" d="M12 2c1 3-1 4-1 6 0 1.2 1 2 2 2 1.3 0 2-1 2-2.2 1.6 1.4 3 3.7 3 6.2a6 6 0 0 1-12 0c0-2.6 1.1-4.3 2.3-6C9.2 6.3 10.5 4.4 12 2Z"/></svg>
-        Optimiser
       </button>` : ""}
-      ${items.map((r) => renderRdvChip(r, clientMap, domicile)).join("")}
+      ${matinItems.length ? `<div class="day-period-label">Matin</div>${matinItems.map((r) => renderRdvChip(r, clientMap, domicile)).join("")}` : ""}
+      ${apremItems.length ? `<div class="day-period-label">Après-midi</div>${apremItems.map((r) => renderRdvChip(r, clientMap, domicile)).join("")}` : ""}
+      ${autresItems.length ? `<div class="day-period-label">Non précisé</div>${autresItems.map((r) => renderRdvChip(r, clientMap, domicile)).join("")}` : ""}
       <button class="day-col-add" data-add="${iso}">+</button>
     </div>`;
   }
@@ -464,7 +470,6 @@ function renderRdvChip(r, clientMap, domicile) {
   const name = c ? clientFullName(c) : "Client supprimé";
   const addr = c ? c.adresse : (r.adresse || "");
   const honore = r.statut === "honore";
-  const period = periodLabel(r.periode);
   const hasComment = c && c.commentaires;
 
   let distClass = "";
@@ -479,7 +484,7 @@ function renderRdvChip(r, clientMap, domicile) {
   return `<button class="rdv-chip ${chipClass}" data-rdv-chip="${r.id}">
     <div class="chip-top-row">
       <span class="type-badge ${typeBadgeClass}">${typeBadgeLabel}</span>
-      ${honore ? '<span class="chip-period">✓ Honoré</span>' : (period ? `<span class="chip-period">${period}</span>` : "")}
+      ${honore ? '<span class="chip-period">✓</span>' : ""}
     </div>
     <span class="chip-name">${hasComment ? '<span title="Commentaire client">⚠️</span> ' : ""}${clientBadge(c)}${escapeHtml(name)}</span>
     ${addr ? `<span class="chip-addr">📍 ${escapeHtml(addr)}</span>` : ""}
@@ -533,7 +538,7 @@ function getCurrentPosition() {
 async function optimizeDay(dateISO) {
   openSheet(`
     <h2>Point de départ</h2>
-    <p style="color:var(--smoke);font-size:13px;margin:-6px 0 14px;">D'où pars-tu pour cette tournée ?</p>
+    <p style="color:var(--smoke);font-size:13px;margin:-6px 0 14px;">D'où pars-tu pour cette tournée ? Les périodes Matin et Après-midi sont calculées séparément, puis tu reviens au domicile entre les deux (et à la fin).</p>
     <button class="choice-tile" id="opt-domicile">
       <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 3l9 8h-3v9h-5v-6H11v6H6v-9H3z"/></svg>
       <span>Domicile<span class="sub">${DOMICILE_ADRESSE}</span></span>
@@ -553,62 +558,64 @@ async function optimizeDay(dateISO) {
     toast("Localisation du domicile…");
     const coords = await getDomicileCoords();
     if (!coords) { toast("Géocodage du domicile impossible (hors ligne ?)"); return; }
-    openOrderConstraintsSheet(dateISO, coords);
+    optimizeBothPeriods(dateISO, coords);
   };
   document.getElementById("opt-gps").onclick = async () => {
     closeSheet();
     toast("Localisation en cours…");
     const coords = await getCurrentPosition();
     if (!coords) { toast("Localisation indisponible"); return; }
-    openOrderConstraintsSheet(dateISO, coords);
+    optimizeBothPeriods(dateISO, coords);
   };
-  document.getElementById("opt-none").onclick = () => { closeSheet(); openOrderConstraintsSheet(dateISO, null); };
+  document.getElementById("opt-none").onclick = () => { closeSheet(); optimizeBothPeriods(dateISO, null); };
 }
 
-async function openOrderConstraintsSheet(dateISO, depart) {
-  const rdvs = (await DB.listRendezvous()).filter((r) => r.date === dateISO && r.statut !== "honore");
-  const clients = await DB.listClients();
-  const cmap = Object.fromEntries(clients.map((c) => [c.id, c]));
-  const options = rdvs.map((r) => ({ id: r.id, name: clientFullName(cmap[r.clientId]) || "Client" }));
-  const optionsHtml = options.map((o) => `<option value="${o.id}">${escapeHtml(o.name)}</option>`).join("");
+// Demande (facultative) d'un premier/dernier client pour UNE période donnée.
+// Renvoie une Promise résolue avec {forceFirst, forceLast}, ou null si annulé.
+function askOrderConstraints(label, rdvs) {
+  return new Promise(async (resolve) => {
+    const clients = await DB.listClients();
+    const cmap = Object.fromEntries(clients.map((c) => [c.id, c]));
+    const options = rdvs.map((r) => ({ id: r.id, name: clientFullName(cmap[r.clientId]) || "Client" }));
+    const optionsHtml = options.map((o) => `<option value="${o.id}">${escapeHtml(o.name)}</option>`).join("");
 
-  openSheet(`
-    <h2>Ordre de la tournée</h2>
-    <p style="color:var(--smoke);font-size:13px;margin:-6px 0 14px;">Facultatif : impose un client en premier et/ou en dernier — le reste sera optimisé automatiquement.</p>
-    <div class="form-row">
-      <label>Premier client</label>
-      <select id="f-force-first" style="width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:10px;font-size:15px;background:var(--surface);color:var(--ink);">
-        <option value="">Aucun (laisser optimiser)</option>
-        ${optionsHtml}
-      </select>
-    </div>
-    <div class="form-row">
-      <label>Dernier client</label>
-      <select id="f-force-last" style="width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:10px;font-size:15px;background:var(--surface);color:var(--ink);">
-        <option value="">Aucun (laisser optimiser)</option>
-        ${optionsHtml}
-      </select>
-    </div>
-    <div class="sheet-actions">
-      <button class="btn-secondary" id="cancel-btn">Annuler</button>
-      <button class="btn-primary" id="go-btn">Calculer</button>
-    </div>
-  `);
-  document.getElementById("cancel-btn").onclick = closeSheet;
-  document.getElementById("go-btn").onclick = () => {
-    const forceFirst = document.getElementById("f-force-first").value || null;
-    const forceLast = document.getElementById("f-force-last").value || null;
-    if (forceFirst && forceFirst === forceLast) { toast("Choisis deux clients différents pour le premier et le dernier"); return; }
-    closeSheet();
-    runOptimize(dateISO, depart, forceFirst, forceLast);
-  };
+    openSheet(`
+      <h2>Ordre — ${escapeHtml(label)}</h2>
+      <p style="color:var(--smoke);font-size:13px;margin:-6px 0 14px;">Facultatif : impose un client en premier et/ou en dernier pour cette période — le reste sera optimisé automatiquement. Si tu choisis un premier client, le trajet démarre directement chez lui (pas de détour par le point de départ).</p>
+      <div class="form-row">
+        <label>Premier client</label>
+        <select id="f-force-first" style="width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:10px;font-size:15px;background:var(--surface);color:var(--ink);">
+          <option value="">Aucun (laisser optimiser)</option>
+          ${optionsHtml}
+        </select>
+      </div>
+      <div class="form-row">
+        <label>Dernier client</label>
+        <select id="f-force-last" style="width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:10px;font-size:15px;background:var(--surface);color:var(--ink);">
+          <option value="">Aucun (laisser optimiser)</option>
+          ${optionsHtml}
+        </select>
+      </div>
+      <div class="sheet-actions">
+        <button class="btn-secondary" id="cancel-btn">Annuler</button>
+        <button class="btn-primary" id="go-btn">Continuer</button>
+      </div>
+    `);
+    document.getElementById("cancel-btn").onclick = () => { closeSheet(); resolve(null); };
+    document.getElementById("go-btn").onclick = () => {
+      const forceFirst = document.getElementById("f-force-first").value || null;
+      const forceLast = document.getElementById("f-force-last").value || null;
+      if (forceFirst && forceFirst === forceLast) { toast("Choisis deux clients différents pour le premier et le dernier"); return; }
+      closeSheet();
+      resolve({ forceFirst, forceLast });
+    };
+  });
 }
 
-async function runOptimize(dateISO, depart, forceFirstId, forceLastId) {
-  const rdvs = (await DB.listRendezvous()).filter((r) => r.date === dateISO && r.statut !== "honore");
+// Calcule et enregistre l'ordre optimisé pour un lot de rendez-vous (une période).
+async function computeOptimizedRoute(rdvs, depart, forceFirstId, forceLastId) {
   const clients = await DB.listClients();
   const cmap = Object.fromEntries(clients.map((c) => [c.id, c]));
-
   const points = [];
   let missing = 0;
   for (const r of rdvs) {
@@ -616,16 +623,9 @@ async function runOptimize(dateISO, depart, forceFirstId, forceLastId) {
     if (c && c.lat != null) points.push({ id: r.id, lat: c.lat, lon: c.lon, name: clientFullName(c), badge: clientBadge(c) });
     else missing++;
   }
-  if (points.length < 2) {
-    toast("Il faut au moins 2 clients géocodés ce jour-là");
-    return;
-  }
+  if (points.length < 2) return { error: "Pas assez de clients géocodés sur cette période (minimum 2).", missing };
 
-  const roundtrip = !!(await DB.getParam("retourDepart", false));
-
-  toast("Calcul de l'itinéraire…");
-  const result = await optimizeTripConstrained(points, depart, roundtrip, forceFirstId, forceLastId);
-
+  const result = await optimizeTripConstrained(points, depart, true, forceFirstId, forceLastId);
   for (const rdvId of result.order) {
     const r = rdvs.find((x) => x.id === rdvId);
     if (r) r.ordre = result.order.indexOf(rdvId);
@@ -633,17 +633,48 @@ async function runOptimize(dateISO, depart, forceFirstId, forceLastId) {
   for (const r of rdvs) if (r.ordre != null && points.some((p) => p.id === r.id)) await DB.saveRendezvous(r);
 
   const names = result.order.map((id) => points.find((p) => p.id === id)).filter(Boolean).map((p) => `${p.badge}${escapeHtml(p.name)}`);
-  const steps = depart ? ["Départ", ...names] : names;
+  return { names, missing, distanceKm: result.distanceKm, durationMin: result.durationMin, estimated: result.estimated, startsAtClient: !!forceFirstId };
+}
+
+// Orchestre l'optimisation Matin puis Après-midi séparément, puis affiche le résultat combiné.
+async function optimizeBothPeriods(dateISO, depart) {
+  const allRdvs = (await DB.listRendezvous()).filter((r) => r.date === dateISO && r.statut !== "honore");
+  const groups = [
+    { key: "matin", label: "Matin", rdvs: allRdvs.filter((r) => r.periode === "matin") },
+    { key: "apres-midi", label: "Après-midi", rdvs: allRdvs.filter((r) => r.periode !== "matin") },
+  ].filter((g) => g.rdvs.length >= 2);
+
+  if (groups.length === 0) {
+    toast("Il faut au moins 2 rendez-vous géocodés sur une même période (matin ou après-midi) pour optimiser");
+    return;
+  }
+
+  const outcomes = [];
+  for (const g of groups) {
+    const constraints = await askOrderConstraints(g.label, g.rdvs);
+    if (constraints === null) return; // annulé en cours de route
+    const outcome = await computeOptimizedRoute(g.rdvs, depart, constraints.forceFirst, constraints.forceLast);
+    outcomes.push({ label: g.label, ...outcome });
+  }
+
+  const sections = outcomes.map((o) => {
+    if (o.error) return `<div class="info-block"><h3>${escapeHtml(o.label)}</h3><p class="near-hint">${escapeHtml(o.error)}</p></div>`;
+    const steps = (o.startsAtClient || !depart) ? o.names : ["Départ", ...o.names];
+    return `
+      <div class="info-block">
+        <h3>${escapeHtml(o.label)}</h3>
+        ${o.missing > 0 ? `<p style="color:var(--smoke);font-size:12px;margin:0 0 8px;">${o.missing} client(s) non géocodé(s) ignoré(s).</p>` : ""}
+        ${o.estimated ? `<p style="color:var(--ember);font-size:12px;margin:0 0 8px;">⚠️ Calcul routier indisponible — estimation à vol d'oiseau.</p>` : ""}
+        <div class="near-list">${steps.map((n, i) => `<div class="near-item"><span>${i + 1}. ${n}</span></div>`).join("")}</div>
+        <div class="info-row" style="margin-top:8px;"><span class="k">Distance</span><span class="v">${o.distanceKm.toFixed(1)} km</span></div>
+        ${o.durationMin != null ? `<div class="info-row"><span class="k">Durée estimée</span><span class="v">${Math.round(o.durationMin)} min</span></div>` : ""}
+      </div>
+    `;
+  }).join("");
 
   openSheet(`
-    <h2>Trajet optimisé</h2>
-    ${missing > 0 ? `<p style="color:var(--smoke);font-size:12.5px;margin:-8px 0 12px;">${missing} client(s) non géocodé(s) ignoré(s) — ordre non garanti pour eux.</p>` : ""}
-    ${result.estimated ? `<p style="color:var(--ember);font-size:12.5px;margin:-4px 0 12px;">⚠️ Calcul routier indisponible — estimation à vol d'oiseau.</p>` : ""}
-    <div class="near-list">
-      ${steps.map((n, i) => `<div class="near-item"><span>${i + 1}. ${n}</span></div>`).join("")}
-    </div>
-    <div class="info-row" style="margin-top:10px;"><span class="k">Distance totale</span><span class="v">${result.distanceKm.toFixed(1)} km</span></div>
-    ${result.durationMin != null ? `<div class="info-row"><span class="k">Durée estimée</span><span class="v">${Math.round(result.durationMin)} min</span></div>` : ""}
+    <h2>Trajets optimisés</h2>
+    ${sections}
     <div class="sheet-actions"><button class="btn-primary" id="ok-btn" style="width:100%;">OK</button></div>
   `);
   document.getElementById("ok-btn").onclick = () => { closeSheet(); refreshAgendaBody(); };
@@ -728,7 +759,7 @@ function clientRowHtml(c) {
   return `<button class="client-row" data-client="${c.id}">
     <span class="client-avatar">${initials(c)}</span>
     <span>
-      <span class="cname">${clientBadge(c)}${escapeHtml(clientFullName(c))} ${c.adresse && c.lat == null ? '<span class="geo-dot" title="Adresse non géocodée"></span>' : ""}</span>
+      <span class="cname">${clientBadge(c)}${escapeHtml(clientFullName(c))} ${c.lat != null ? '<span class="geo-dot geo-dot-ok" title="Adresse géocodée"></span>' : (c.adresse ? '<span class="geo-dot geo-dot-missing" title="Adresse non géocodée"></span>' : "")}</span>
       <span class="caddr">${escapeHtml(c.adresse || "Adresse non renseignée")}</span>
     </span>
     <span class="chevron">
@@ -1033,14 +1064,26 @@ function normalizeBrand(s) {
 
 // Regroupe les marques dont l'orthographe se ressemble (ex : "Extraflamme" / "Extraflame" /
 // "EXTRA FLAMME") sous une seule entrée, sans liste de marques prédéfinie à maintenir.
+// Regroupe aussi explicitement quelques marques sœurs connues (même groupe industriel).
+const BRAND_GROUP_ALIASES = {
+  nordica: "nordicaextraflame",
+  extraflame: "nordicaextraflame",
+  devillepegase: "deville",
+};
+const BRAND_GROUP_LABELS = {
+  nordicaextraflame: "NORDICA / EXTRAFLAME",
+  deville: "DEVILLE",
+};
+
 async function computeBrandStats() {
   const clients = await DB.listClients();
   const counts = new Map();
   clients.forEach((c) => {
     const raw = (c.marque || "").trim();
     if (!raw) return;
-    const norm = normalizeBrand(raw);
+    let norm = normalizeBrand(raw);
     if (!norm) return;
+    if (BRAND_GROUP_ALIASES[norm]) norm = BRAND_GROUP_ALIASES[norm];
     if (!counts.has(norm)) counts.set(norm, { count: 0, labels: new Map() });
     const entry = counts.get(norm);
     entry.count++;
@@ -1064,6 +1107,7 @@ async function computeBrandStats() {
   });
 
   const results = clusters.map((cl) => {
+    if (BRAND_GROUP_LABELS[cl.key]) return { label: BRAND_GROUP_LABELS[cl.key], count: cl.count };
     let bestLabel = "", bestCount = -1;
     cl.labels.forEach((c, label) => { if (c > bestCount) { bestCount = c; bestLabel = label; } });
     return { label: bestLabel.toUpperCase(), count: cl.count };
@@ -1097,30 +1141,17 @@ async function renderBrandStats() {
   }).join("");
 }
 
-// ---------- Paramètres ----------
+// ---------- Réglages ----------
 async function renderReglages() {
-  const retourDepart = await DB.getParam("retourDepart", false);
   const clientsSansGeo = (await DB.listClients()).filter((c) => c.adresse && c.lat == null).length;
   const recapEmail = await DB.getParam("recapEmail", "");
 
   root.innerHTML = `
-    <h2 class="view-heading">Paramètres</h2>
+    <h2 class="view-heading">Réglages</h2>
 
     <div class="info-block">
       <h3>À propos</h3>
       <div class="info-row"><span class="k">Version de l'application</span><span class="v">${APP_VERSION}</span></div>
-    </div>
-
-    <div class="info-block">
-      <h3>Trajet</h3>
-      <p style="font-size:13.5px;color:var(--smoke);margin:0 0 10px;">Le point de départ (Domicile ou position actuelle) se choisit à chaque optimisation, directement depuis l'agenda.</p>
-      <div class="form-row" style="margin-bottom:0;">
-        <label>En fin de tournée</label>
-        <div class="pill-choice" id="f-retour">
-          <button type="button" data-val="0" class="${!retourDepart ? "active period-active" : ""}">Terminer chez le dernier client</button>
-          <button type="button" data-val="1" class="${retourDepart ? "active period-active" : ""}">Revenir au départ</button>
-        </div>
-      </div>
     </div>
 
     <div class="info-block">
@@ -1153,7 +1184,6 @@ async function renderReglages() {
 
     <div class="info-block">
       <h3>Ajouter un fichier à Drive</h3>
-      <p style="font-size:13.5px;color:var(--smoke);margin:0 0 12px;">Pour un fichier de sauvegarde reçu autrement que par Drive (par exemple par e-mail) : il est envoyé vers ton Drive, puis s'importe exactement comme une sauvegarde normale via "Importer depuis Drive" ci-dessus.</p>
       <input type="file" accept="application/json" id="local-import-file" hidden />
       <button class="btn-secondary" id="local-import-btn" style="width:100%;">Choisir un fichier</button>
     </div>
@@ -1168,15 +1198,6 @@ async function renderReglages() {
     await DB.setParam("recapEmail", document.getElementById("recap-email-input").value.trim());
     toast("Adresse enregistrée");
   };
-
-  document.querySelectorAll("#f-retour button").forEach((b) => {
-    b.onclick = async () => {
-      document.querySelectorAll("#f-retour button").forEach((x) => x.classList.remove("active", "period-active"));
-      b.classList.add("active", "period-active");
-      await DB.setParam("retourDepart", b.dataset.val === "1");
-      toast("Paramètres enregistrés");
-    };
-  });
 
   document.getElementById("geocode-all-btn").onclick = async () => {
     const clients = (await DB.listClients()).filter((c) => c.adresse && c.lat == null);
@@ -1880,7 +1901,7 @@ async function openClientForm(existing, onSaved) {
         <button type="button" data-val="non" class="${c.nouveauClient === "non" ? "active period-active" : ""}">Non</button>
       </div>
     </div>
-    <label class="chk" style="margin-top:12px;"><input type="checkbox" id="f-pastille" ${c.pastilleBleue ? "checked" : ""} /> Marquer ce client (pastille bleue visible partout)</label>
+    <label class="chk" style="margin-top:12px;"><input type="checkbox" id="f-pastille" ${c.pastilleBleue ? "checked" : ""} /> Pastille bleue</label>
     <div class="form-row"><label>Téléphone</label><input type="tel" id="f-tel" value="${escapeAttr(c.telephone)}" /></div>
     <div class="form-row"><label>Téléphone secondaire (facultatif)</label><input type="tel" id="f-tel2" value="${escapeAttr(c.telephone2)}" /></div>
     <div class="form-row"><label>E-mail (facultatif)</label><input type="email" id="f-email" value="${escapeAttr(c.email)}" /></div>
@@ -2098,6 +2119,7 @@ async function openRdvForm(prefill = {}, existing) {
       <div class="form-row">
         <div id="f-client-selected" class="client-picker-selected"></div>
         <div id="f-client-comment"></div>
+        <div id="f-client-history"></div>
         <input type="text" id="f-client-search" placeholder="Rechercher un client…" />
         <div id="f-client-results" class="client-picker-results"></div>
       </div>
@@ -2129,7 +2151,6 @@ async function openRdvForm(prefill = {}, existing) {
     <div id="near-container"></div>
     <div class="info-block" style="margin-top:2px;">
       <h3>Proposer une date selon le secteur</h3>
-      <p class="near-hint" style="margin:0 0 8px;">Utile au téléphone : indique la ville ou l'adresse dite par l'appelant pour voir si d'autres clients y ont déjà rendez-vous.</p>
       <input type="text" id="f-sector-input" placeholder="Ville ou adresse (ex : Étretat)" style="width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:10px;font-size:15px;background:var(--surface);color:var(--ink);margin-bottom:10px;" />
       <div class="form-row" style="margin-bottom:10px;">
         <label>Rayon de recherche</label>
@@ -2177,6 +2198,20 @@ async function openRdvForm(prefill = {}, existing) {
       commentEl.innerHTML = (c && c.commentaires)
         ? `<p class="near-hint" style="margin:6px 0 0;">💬 ${escapeHtml(c.commentaires)}</p>`
         : "";
+    }
+    const historyEl = document.getElementById("f-client-history");
+    if (historyEl) {
+      if (!c) { historyEl.innerHTML = ""; }
+      else {
+        DB.listInterventionsForClient(c.id).then((hist) => {
+          if (!hist.length) { historyEl.innerHTML = ""; return; }
+          const sorted = hist.slice().sort((a, b) => b.date.localeCompare(a.date)).slice(0, 5);
+          historyEl.innerHTML = `
+            <div class="near-hint" style="margin:8px 0 4px;">Historique chez ce client :</div>
+            ${sorted.map((h) => `<div class="near-hint" style="margin:0 0 2px;">• ${fmtDateFR(h.date)} — ${h.type === "entretien" ? "Entretien" : "Dépannage"}</div>`).join("")}
+          `;
+        });
+      }
     }
   }
   updateSelectedDisplay();
@@ -2736,9 +2771,24 @@ if ("serviceWorker" in navigator) {
 }
 
 // ---------- Démarrage ----------
+async function migratePeriodeNonPrecisee() {
+  const done = await DB.getParam("migrationPeriodeApresmidi", false);
+  if (done) return;
+  const all = await DB.listRendezvous();
+  for (const r of all) {
+    if (!r.periode) {
+      r.periode = "apres-midi";
+      await DB.saveRendezvous(r);
+    }
+  }
+  await DB.setParam("migrationPeriodeApresmidi", true);
+  if (state.view === "agenda") refreshAgendaBody();
+}
+
 history.replaceState(historySnapshot(), "", "#accueil");
 render();
 maybeAutoCloudBackup();
 maybeAutoCalendarSync();
 maybeFridayReminder();
 maybeStaleCalendarWarning();
+migratePeriodeNonPrecisee();

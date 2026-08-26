@@ -135,7 +135,8 @@ async function optimizeTripConstrained(points, startPoint, roundtrip, forceFirst
 
   const byId = Object.fromEntries(points.map((p) => [p.id, p]));
   let dist = middleResult.distanceKm;
-  if (forcedFirst && startPoint) dist += haversineKm(startPoint.lat, startPoint.lon, forcedFirst.lat, forcedFirst.lon);
+  // Si un premier client est imposé, le trajet démarre directement chez lui : on ne
+  // compte pas le trajet point de départ -> premier client.
   if (forcedLast) {
     const prevId = middleResult.order.length ? middleResult.order[middleResult.order.length - 1] : null;
     const prevPoint = prevId ? byId[prevId] : (forcedFirst || startPoint);

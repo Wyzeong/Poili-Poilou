@@ -2,7 +2,7 @@
    Vues : Accueil / Agenda / Clients / Fiche client / Paramètres
    Toute la donnée passe par DB (db.js → IndexedDB). */
 
-const APP_VERSION = "1.29.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
+const APP_VERSION = "1.29.1"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
 
 const JOURS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
 const JOURS_COURT = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
@@ -641,20 +641,23 @@ async function runOptimize(dateISO, depart, forceFirstId, forceLastId) {
 async function getFilteredClients() {
   let clients = await DB.searchClients(state.clientSearch);
   if (state.clientFilter === "imported") clients = clients.filter((c) => c.source === "import");
+  else if (state.clientFilter === "nogeo") clients = clients.filter((c) => c.adresse && c.lat == null);
   return clients;
 }
 
 async function renderClients() {
   const allClients = await DB.listClients();
   const importedCount = allClients.filter((c) => c.source === "import").length;
+  const nogeoCount = allClients.filter((c) => c.adresse && c.lat == null).length;
   const clients = await getFilteredClients();
 
   let html = `<h2 class="view-heading">Clients</h2>`;
-  if (importedCount > 0) {
+  if (importedCount > 0 || nogeoCount > 0) {
     html += `
       <div class="pill-choice" id="client-filter-tabs" style="margin-bottom:10px;">
-        <button type="button" data-val="all" class="${state.clientFilter !== "imported" ? "active period-active" : ""}">Tous</button>
-        <button type="button" data-val="imported" class="${state.clientFilter === "imported" ? "active period-active" : ""}">Clients importés (${importedCount})</button>
+        <button type="button" data-val="all" class="${state.clientFilter === "all" ? "active period-active" : ""}">Tous</button>
+        ${importedCount > 0 ? `<button type="button" data-val="imported" class="${state.clientFilter === "imported" ? "active period-active" : ""}">Importés (${importedCount})</button>` : ""}
+        ${nogeoCount > 0 ? `<button type="button" data-val="nogeo" class="${state.clientFilter === "nogeo" ? "active period-active" : ""}">Non géocodés (${nogeoCount})</button>` : ""}
       </div>
     `;
     if (state.clientFilter === "imported") {
@@ -664,7 +667,7 @@ async function renderClients() {
   html += `<input type="text" class="search-bar" id="client-search" placeholder="Rechercher un client (nom, adresse, téléphone)" value="${escapeHtml(state.clientSearch)}" />`;
 
   if (clients.length === 0) {
-    html += `<div class="empty-state"><span class="emoji">🔍</span>${state.clientSearch ? "Aucun client trouvé." : (state.clientFilter === "imported" ? "Aucun client importé pour l'instant." : "Aucun client pour l'instant.<br>Ajoute ton premier client avec le bouton +.")}</div>`;
+    html += `<div class="empty-state"><span class="emoji">🔍</span>${state.clientSearch ? "Aucun client trouvé." : (state.clientFilter === "imported" ? "Aucun client importé pour l'instant." : state.clientFilter === "nogeo" ? "Tous les clients sont géocodés 🎉" : "Aucun client pour l'instant.<br>Ajoute ton premier client avec le bouton +.")}</div>`;
   } else {
     html += clients.map((c) => clientRowHtml(c)).join("");
   }
@@ -713,7 +716,7 @@ function clientRowHtml(c) {
   return `<button class="client-row" data-client="${c.id}">
     <span class="client-avatar">${initials(c)}</span>
     <span>
-      <span class="cname">${clientBadge(c)}${escapeHtml(clientFullName(c))} ${c.lat != null ? '<span class="geo-dot" title="Adresse géocodée"></span>' : ""}</span>
+      <span class="cname">${clientBadge(c)}${escapeHtml(clientFullName(c))} ${c.adresse && c.lat == null ? '<span class="geo-dot" title="Adresse non géocodée"></span>' : ""}</span>
       <span class="caddr">${escapeHtml(c.adresse || "Adresse non renseignée")}</span>
     </span>
     <span class="chevron">

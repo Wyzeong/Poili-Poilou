@@ -2,7 +2,7 @@
    Vues : Accueil / Agenda / Clients / Fiche client / Réglages
    Toute la donnée passe par DB (db.js → IndexedDB). */
 
-const APP_VERSION = "1.34.5"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
+const APP_VERSION = "1.35.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
 
 const JOURS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
 const JOURS_COURT = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
@@ -369,6 +369,26 @@ async function renderCalendarSyncStatusLine() {
 
 // Change de semaine avec une petite animation de glissement (le contenu actuel sort
 // d'un côté, le nouveau entre de l'autre), utilisée par le swipe et par les flèches.
+// Vacances scolaires zone B (académie de Normandie) — dates officielles publiées par le
+// ministère de l'Éducation nationale (arrêtés du 22 octobre 2025 et précédents).
+// À mettre à jour manuellement quand de nouvelles années scolaires sont publiées.
+const ZONE_B_HOLIDAYS = [
+  { name: "Toussaint", start: "2025-10-18", end: "2025-11-03" },
+  { name: "Noël", start: "2025-12-20", end: "2026-01-05" },
+  { name: "Hiver", start: "2026-02-14", end: "2026-03-02" },
+  { name: "Printemps", start: "2026-04-11", end: "2026-04-27" },
+  { name: "Été", start: "2026-07-04", end: "2026-09-01" },
+  { name: "Toussaint", start: "2026-10-17", end: "2026-11-02" },
+  { name: "Noël", start: "2026-12-19", end: "2027-01-04" },
+  { name: "Hiver", start: "2027-02-20", end: "2027-03-08" },
+  { name: "Printemps", start: "2027-04-17", end: "2027-05-03" },
+  { name: "Été", start: "2027-07-03", end: "2027-09-01" },
+];
+function getZoneBHoliday(iso) {
+  const h = ZONE_B_HOLIDAYS.find((h) => iso >= h.start && iso <= h.end);
+  return h ? h.name : null;
+}
+
 function changeWeek(days) {
   const body = document.getElementById("agenda-body");
   if (!body) { state.weekStart = addDays(state.weekStart, days); refreshAgendaBody(); return; }
@@ -438,6 +458,7 @@ async function refreshAgendaBody() {
     const items = (byDate[iso] || []).slice().sort((a, b) => (a.ordre ?? 0) - (b.ordre ?? 0));
     const pendingCount = items.filter((r) => r.statut !== "honore").length;
     const calEvents = await getCalendarEventsForDate(iso);
+    const holiday = getZoneBHoliday(iso);
     const matinItems = items.filter((r) => r.periode === "matin");
     const apremItems = items.filter((r) => r.periode === "apres-midi");
     const autresItems = items.filter((r) => r.periode !== "matin" && r.periode !== "apres-midi");
@@ -447,6 +468,7 @@ async function refreshAgendaBody() {
         <div class="dow">${JOURS_COURT[(d.getDay() + 6) % 7]}</div>
         <div class="dnum">${d.getDate()}</div>
       </div>
+      ${holiday ? `<div class="holiday-chip">🏖️ ${escapeHtml(holiday)}</div>` : ""}
       ${calEvents.map((ev) => `<div class="cal-chip">📅 ${ev.time ? escapeHtml(ev.time) + " · " : ""}${escapeHtml(ev.title)}</div>`).join("")}
       ${pendingCount >= 2 ? `<button class="day-col-optimize" data-optimize="${iso}" title="Optimiser les trajets">
         <svg viewBox="0 0 24 24" width="13" height="13"><path fill="currentColor" d="M12 2c1 3-1 4-1 6 0 1.2 1 2 2 2 1.3 0 2-1 2-2.2 1.6 1.4 3 3.7 3 6.2a6 6 0 0 1-12 0c0-2.6 1.1-4.3 2.3-6C9.2 6.3 10.5 4.4 12 2Z"/></svg>

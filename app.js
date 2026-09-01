@@ -2,7 +2,7 @@
    Vues : Accueil / Agenda / Clients / Fiche client / Réglages
    Toute la donnée passe par DB (db.js → IndexedDB). */
 
-const APP_VERSION = "1.35.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
+const APP_VERSION = "1.37.1"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
 
 const JOURS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
 const JOURS_COURT = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
@@ -887,8 +887,12 @@ async function renderFiche() {
     <div class="info-block">
       <h3>Photos</h3>
       <div id="client-photos-grid">${photoGridHtml(c.photos, true)}</div>
+      <input type="file" accept="image/*" capture="environment" id="client-photo-camera-input" hidden />
       <input type="file" accept="image/*" multiple id="client-photo-input" hidden />
-      <button class="btn-secondary" id="client-photo-add-btn" style="width:100%;margin-top:8px;">+ Ajouter une photo</button>
+      <div class="sheet-actions" style="margin-top:8px;">
+        <button class="btn-secondary" id="client-photo-camera-btn">📷 Prendre une photo</button>
+        <button class="btn-secondary" id="client-photo-add-btn">🖼️ Choisir dans la galerie</button>
+      </div>
     </div>
 
     <div class="info-block">
@@ -936,9 +940,8 @@ async function renderFiche() {
   document.getElementById("edit-client-btn").onclick = () => openClientForm(c);
   document.getElementById("del-client-btn").onclick = () => confirmDeleteClient(c);
 
-  document.getElementById("client-photo-add-btn").onclick = () => document.getElementById("client-photo-input").click();
-  document.getElementById("client-photo-input").onchange = async (e) => {
-    const newPhotos = await resizeImageFilesToDataURLs(e.target.files);
+  async function handleClientPhotoFiles(files) {
+    const newPhotos = await resizeImageFilesToDataURLs(files);
     if (newPhotos.length === 0) return;
     const fresh = await DB.getClient(c.id);
     if (fresh) {
@@ -947,7 +950,11 @@ async function renderFiche() {
       toast("Photo ajoutée ✓");
       render();
     }
-  };
+  }
+  document.getElementById("client-photo-camera-btn").onclick = () => document.getElementById("client-photo-camera-input").click();
+  document.getElementById("client-photo-camera-input").onchange = (e) => handleClientPhotoFiles(e.target.files);
+  document.getElementById("client-photo-add-btn").onclick = () => document.getElementById("client-photo-input").click();
+  document.getElementById("client-photo-input").onchange = (e) => handleClientPhotoFiles(e.target.files);
   document.querySelectorAll("#client-photos-grid .photo-remove").forEach((btn) => {
     btn.onclick = async () => {
       const idx = parseInt(btn.dataset.idx, 10);
@@ -2145,7 +2152,7 @@ async function renderNearbyHtml(clientId, dateISO, excludeRdvId, radiusKm, horiz
     .map((r) => {
       const rc = cmap[r.clientId];
       if (!rc || rc.lat == null) return null;
-      return { date: r.date, name: clientFullName(rc), distKm: haversineKm(client.lat, client.lon, rc.lat, rc.lon) };
+      return { date: r.date, periode: r.periode || "", name: clientFullName(rc), distKm: haversineKm(client.lat, client.lon, rc.lat, rc.lon) };
     })
     .filter((x) => x && x.distKm <= radiusKm)
     .sort((a, b) => a.distKm - b.distKm);
@@ -2153,10 +2160,41 @@ async function renderNearbyHtml(clientId, dateISO, excludeRdvId, radiusKm, horiz
   if (withDist.length === 0) {
     return wrap(`<p class="near-hint">Aucun rendez-vous trouvé à moins de ${radiusKm} km dans les ${horizonMonths} prochains mois.</p>`);
   }
+
+  // Charge de chaque demi-journée concernée : nombre total de RDV déjà pris ce jour-là,
+  // sur ce créneau précis (indépendamment de la distance).
+  function loadTone(count) {
+    if (count <= 0) return null;
+    if (count === 1) return { c: "var(--moss)", w: "var(--moss-wash)" };
+    if (count === 2) return { c: "var(--amber)", w: "var(--amber-wash)" };
+    return { c: "var(--danger)", w: "var(--danger-wash)" };
+  }
+  const loadCache = new Map();
+  function loadFor(date, periode) {
+    if (!periode) return null;
+    const key = `${date}|${periode}`;
+    if (!loadCache.has(key)) {
+      const count = all.filter((r) => r.id !== excludeRdvId && r.date === date && r.periode === periode && r.statut !== "honore").length;
+      loadCache.set(key, count);
+    }
+    return loadCache.get(key);
+  }
+
   return wrap(`
     <p class="near-hint" style="margin:0 0 6px;">Touche une date pour la reprendre pour ce rendez-vous.</p>
     <div class="near-list">
-      ${withDist.map((x) => `<button type="button" class="near-item near-item-btn" data-copy-date="${x.date}"><span>${fmtDateFullFR(x.date)} — ${escapeHtml(x.name)}</span><span class="dist">${x.distKm.toFixed(1)} km</span></button>`).join("")}
+      ${withDist.map((x) => {
+        const count = loadFor(x.date, x.periode);
+        const tone = loadTone(count);
+        const periodeLabel = x.periode === "matin" ? "Matin" : x.periode === "apres-midi" ? "Après-midi" : "";
+        return `<button type="button" class="near-item near-item-btn" data-copy-date="${x.date}" data-copy-periode="${x.periode}">
+          <span>${fmtDateFullFR(x.date)}${periodeLabel ? " · " + periodeLabel : ""} — ${escapeHtml(x.name)}</span>
+          <span style="display:flex;align-items:center;gap:6px;">
+            ${tone ? `<span style="font-size:10px;font-weight:700;padding:2px 6px;border-radius:6px;background:${tone.w};color:${tone.c};">${count} RDV</span>` : ""}
+            <span class="dist">${x.distKm.toFixed(1)} km</span>
+          </span>
+        </button>`;
+      }).join("")}
     </div>
   `);
 }
@@ -2217,12 +2255,12 @@ async function openRdvForm(prefill = {}, existing) {
     <div class="form-row"><label>Date</label><input type="date" id="f-date" value="${date}" /></div>
     <div id="calendar-warning"></div>
     <div class="form-row">
-      <label>Moment souhaité par le client (facultatif)</label>
-      <div class="pill-choice pill-3" id="f-periode">
-        <button type="button" data-val="" class="${periode === "" ? "active period-active" : ""}">Non précisé</button>
+      <label>Moment souhaité par le client</label>
+      <div class="pill-choice" id="f-periode">
         <button type="button" data-val="matin" class="${periode === "matin" ? "active period-active" : ""}">Matin</button>
         <button type="button" data-val="apres-midi" class="${periode === "apres-midi" ? "active period-active" : ""}">Après-midi</button>
       </div>
+      <div id="half-day-load"></div>
     </div>
     <div class="form-row">
       <label>Type d'intervention</label>
@@ -2343,6 +2381,15 @@ async function openRdvForm(prefill = {}, existing) {
     nearContainer.querySelectorAll("[data-copy-date]").forEach((el) => {
       el.onclick = () => {
         document.getElementById("f-date").value = el.dataset.copyDate;
+        const p = el.dataset.copyPeriode;
+        if (p === "matin" || p === "apres-midi") {
+          selPeriode = p;
+          document.querySelectorAll("#f-periode button").forEach((x) => {
+            x.classList.toggle("active", x.dataset.val === p);
+            x.classList.toggle("period-active", x.dataset.val === p);
+          });
+          refreshHalfDayLoad();
+        }
         refreshNearby();
       };
     });
@@ -2412,9 +2459,30 @@ async function openRdvForm(prefill = {}, existing) {
   });
 
   let selPeriode = periode, selType = type;
+
+  async function refreshHalfDayLoad() {
+    const el = document.getElementById("half-day-load");
+    if (!el) return;
+    if (!selPeriode) { el.innerHTML = ""; return; }
+    const dateVal = document.getElementById("f-date").value;
+    const all = await DB.listRendezvous();
+    const count = all.filter((x) => x.id !== (existing ? existing.id : null) && x.date === dateVal && x.periode === selPeriode && x.statut !== "honore").length;
+    if (count === 0) { el.innerHTML = ""; return; }
+    const tone = count === 1 ? { c: "var(--moss)", w: "var(--moss-wash)" } : count === 2 ? { c: "var(--amber)", w: "var(--amber-wash)" } : { c: "var(--danger)", w: "var(--danger-wash)" };
+    const periodeTxt = selPeriode === "matin" ? "ce matin-là" : "cet après-midi-là";
+    el.innerHTML = `<div style="margin-top:8px;padding:8px 10px;border-radius:9px;background:${tone.w};color:${tone.c};font-size:12.5px;font-weight:600;">${count} rendez-vous déjà prévu${count > 1 ? "s" : ""} ${periodeTxt}${count >= 3 ? " — tournée déjà chargée" : ""}</div>`;
+  }
+
   document.querySelectorAll("#f-periode button").forEach((b) => {
-    b.onclick = () => { selPeriode = b.dataset.val; document.querySelectorAll("#f-periode button").forEach((x) => x.classList.remove("active", "period-active")); b.classList.add("active", "period-active"); };
+    b.onclick = () => {
+      selPeriode = b.dataset.val;
+      document.querySelectorAll("#f-periode button").forEach((x) => x.classList.remove("active", "period-active"));
+      b.classList.add("active", "period-active");
+      refreshHalfDayLoad();
+    };
   });
+  document.getElementById("f-date").addEventListener("change", refreshHalfDayLoad);
+  refreshHalfDayLoad();
   document.querySelectorAll("#f-type button").forEach((b) => {
     b.onclick = () => {
       selType = b.dataset.val;
@@ -2426,6 +2494,7 @@ async function openRdvForm(prefill = {}, existing) {
   document.getElementById("cancel-btn").onclick = closeSheet;
   document.getElementById("save-btn").onclick = async () => {
     if (!selectedClientId) { toast("Sélectionne ou crée un client"); return; }
+    if (selPeriode !== "matin" && selPeriode !== "apres-midi") { toast("Choisis Matin ou Après-midi"); return; }
     const client = clients.find((c) => c.id === selectedClientId) || await DB.getClient(selectedClientId);
     if (!client) { toast("Client introuvable"); return; }
     const item = {
@@ -2459,8 +2528,9 @@ async function openRdvForm(prefill = {}, existing) {
 
 async function openRdvConfirmSheet(item, client) {
   const addr = item.adresse || client.adresse || "";
+  const periodeTxt = item.periode === "matin" ? " le matin" : item.periode === "apres-midi" ? " l'après-midi" : "";
   const smsBody = encodeURIComponent(
-    `Bonjour, suite à votre appel je vous confirme la prise d'un rendez-vous pour un ${item.type === "entretien" ? "entretien" : "dépannage"}${addr ? " à l'adresse " + addr : ""} le ${fmtDateFullFR(item.date)}, bonne journée !`
+    `Bonjour, suite à votre appel je vous confirme la prise d'un rendez-vous pour un ${item.type === "entretien" ? "entretien" : "dépannage"}${addr ? " à l'adresse " + addr : ""} le ${fmtDateFullFR(item.date)}${periodeTxt}, bonne journée !`
   );
   const smsHref = client.telephone ? `sms:${client.telephone.replace(/\s+/g, "")}?body=${smsBody}` : null;
 
@@ -2556,8 +2626,12 @@ async function openHonoreForm(r, client) {
     <div class="form-row">
       <label>Photos (facultatif)</label>
       <div id="honore-photos-grid"></div>
+      <input type="file" accept="image/*" capture="environment" id="honore-photo-camera-input" hidden />
       <input type="file" accept="image/*" multiple id="honore-photo-input" hidden />
-      <button type="button" class="btn-secondary" id="honore-photo-add-btn" style="width:100%;margin-top:8px;">+ Ajouter une photo</button>
+      <div class="sheet-actions" style="margin-top:8px;">
+        <button type="button" class="btn-secondary" id="honore-photo-camera-btn">📷 Prendre une photo</button>
+        <button type="button" class="btn-secondary" id="honore-photo-add-btn">🖼️ Choisir dans la galerie</button>
+      </div>
     </div>
     <div class="sheet-actions">
       <button class="btn-secondary" id="cancel-btn">Annuler</button>
@@ -2631,12 +2705,15 @@ async function openHonoreForm(r, client) {
       };
     });
   }
-  document.getElementById("honore-photo-add-btn").onclick = () => document.getElementById("honore-photo-input").click();
-  document.getElementById("honore-photo-input").onchange = async (e) => {
-    const newPhotos = await resizeImageFilesToDataURLs(e.target.files);
+  async function handleHonorePhotoFiles(files) {
+    const newPhotos = await resizeImageFilesToDataURLs(files);
     honorePhotos = [...honorePhotos, ...newPhotos];
     renderHonorePhotosGrid();
-  };
+  }
+  document.getElementById("honore-photo-camera-btn").onclick = () => document.getElementById("honore-photo-camera-input").click();
+  document.getElementById("honore-photo-camera-input").onchange = (e) => handleHonorePhotoFiles(e.target.files);
+  document.getElementById("honore-photo-add-btn").onclick = () => document.getElementById("honore-photo-input").click();
+  document.getElementById("honore-photo-input").onchange = (e) => handleHonorePhotoFiles(e.target.files);
 
   document.querySelectorAll("#f-paiement-mode button").forEach((b) => {
     b.onclick = () => {

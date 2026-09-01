@@ -1,21 +1,21 @@
 :root {
-  --bg: #241F19;
-  --bg-elevated: #2A2419;
-  --surface: #332C21;
-  --surface-2: #3D3527;
-  --line: #4A3F30;
-  --ink: #F5F0E7;
-  --ink-dim: #D2C6B5;
-  --smoke: #A99C89;
-  --ember: #E08A52;
-  --ember-strong: #C2632E;
-  --ember-wash: #423020;
-  --moss: #9DB57C;
-  --moss-wash: #2C3822;
-  --danger: #E6725D;
-  --amber: #DDAC52;
-  --amber-wash: #423419;
-  --danger-wash: #42241E;
+  --bg: #F4EFE3;
+  --bg-elevated: #ECE3CE;
+  --surface: #FFFFFF;
+  --surface-2: #F1E9D7;
+  --line: #DBCDAE;
+  --ink: #2A2318;
+  --ink-dim: #5A4E3B;
+  --smoke: #83765F;
+  --ember: #C2632E;
+  --ember-strong: #A24F22;
+  --ember-wash: #F7DEC5;
+  --moss: #4C7838;
+  --moss-wash: #DCEAC7;
+  --danger: #BF3D28;
+  --amber: #9C6F1F;
+  --amber-wash: #F2E1B5;
+  --danger-wash: #F6D8CE;
 
   --font-display: "Fraunces", Georgia, serif;
   --font-body: "IBM Plex Sans", system-ui, sans-serif;
@@ -347,7 +347,7 @@ button { font-family: inherit; }
   border-radius: 4px;
   line-height: 1.4;
 }
-.type-badge-entretien { background: var(--moss); color: #14200D; }
+.type-badge-entretien { background: var(--moss); color: #F4EFE3; }
 .type-badge-depannage { background: var(--ember); color: #fff; }
 .rdv-chip .chip-period {
   display: inline-block;
@@ -368,9 +368,10 @@ button { font-family: inherit; }
 }
 .rdv-chip .chip-addr {
   display: block;
-  font-size: 8.5px;
-  color: var(--smoke);
-  line-height: 1.25;
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--ink-dim);
+  line-height: 1.3;
   word-break: break-word;
 }
 .day-period-label {
@@ -695,7 +696,7 @@ button { font-family: inherit; }
   font-weight: 500;
   color: var(--ink);
 }
-.pill-choice button.active.type-entretien { background: var(--moss); border-color: var(--moss); color: #14200D; }
+.pill-choice button.active.type-entretien { background: var(--moss); border-color: var(--moss); color: #F4EFE3; }
 .pill-choice button.active.type-depannage { background: var(--ember); border-color: var(--ember); color: #fff; }
 .pill-choice button.active.period-active { background: var(--ink); border-color: var(--ink); color: var(--bg); }
 

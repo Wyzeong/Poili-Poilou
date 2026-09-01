@@ -16,6 +16,8 @@
   --amber: #9C6F1F;
   --amber-wash: #F2E1B5;
   --danger-wash: #F6D8CE;
+  --on-moss: #F4EFE3;
+  --on-ember: #ffffff;
 
   --font-display: "Fraunces", Georgia, serif;
   --font-body: "IBM Plex Sans", system-ui, sans-serif;
@@ -24,6 +26,28 @@
   --radius: 14px;
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+[data-theme="dark"] {
+  --bg: #241F19;
+  --bg-elevated: #2A2419;
+  --surface: #332C21;
+  --surface-2: #3D3527;
+  --line: #4A3F30;
+  --ink: #F5F0E7;
+  --ink-dim: #D2C6B5;
+  --smoke: #A99C89;
+  --ember: #E08A52;
+  --ember-strong: #C2632E;
+  --ember-wash: #423020;
+  --moss: #9DB57C;
+  --moss-wash: #2C3822;
+  --danger: #E6725D;
+  --amber: #DDAC52;
+  --amber-wash: #423419;
+  --danger-wash: #42241E;
+  --on-moss: #14200D;
+  --on-ember: #ffffff;
 }
 
 * { box-sizing: border-box; }
@@ -118,7 +142,13 @@ button { font-family: inherit; }
 .home-greeting {
   color: var(--smoke);
   font-size: 13.5px;
-  margin: -6px 0 20px;
+  margin: -6px 0 4px;
+}
+.home-greeting-sub {
+  color: var(--smoke);
+  font-size: 12px;
+  font-family: var(--font-mono);
+  margin: 0 0 20px;
 }
 .home-buttons { display: flex; flex-direction: column; gap: 12px; }
 .home-btn {
@@ -347,8 +377,8 @@ button { font-family: inherit; }
   border-radius: 4px;
   line-height: 1.4;
 }
-.type-badge-entretien { background: var(--moss); color: #F4EFE3; }
-.type-badge-depannage { background: var(--ember); color: #fff; }
+.type-badge-entretien { background: var(--moss); color: var(--on-moss); }
+.type-badge-depannage { background: var(--ember); color: var(--on-ember); }
 .rdv-chip .chip-period {
   display: inline-block;
   font-family: var(--font-mono);
@@ -696,8 +726,8 @@ button { font-family: inherit; }
   font-weight: 500;
   color: var(--ink);
 }
-.pill-choice button.active.type-entretien { background: var(--moss); border-color: var(--moss); color: #F4EFE3; }
-.pill-choice button.active.type-depannage { background: var(--ember); border-color: var(--ember); color: #fff; }
+.pill-choice button.active.type-entretien { background: var(--moss); border-color: var(--moss); color: var(--on-moss); }
+.pill-choice button.active.type-depannage { background: var(--ember); border-color: var(--ember); color: var(--on-ember); }
 .pill-choice button.active.period-active { background: var(--ink); border-color: var(--ink); color: var(--bg); }
 
 .sheet-actions { display: flex; gap: 10px; margin-top: 18px; }
@@ -902,3 +932,41 @@ input[type="checkbox"] { accent-color: var(--ember); width: 18px; height: 18px; 
 @keyframes agendaSlideOutRight { to { transform: translateX(28px); opacity: 0; } }
 @keyframes agendaSlideInLeft { from { transform: translateX(28px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
 @keyframes agendaSlideInRight { from { transform: translateX(-28px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+
+/* ---------- Visionneuse photo plein écran (avec pincer-zoomer) ---------- */
+.photo-thumb img { cursor: zoom-in; }
+.lightbox-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.94);
+  z-index: 200;
+}
+.lightbox-backdrop[hidden] { display: none; }
+.lightbox-scroll {
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  touch-action: pinch-zoom;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.lightbox-scroll img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+.lightbox-close {
+  position: fixed;
+  top: calc(16px + var(--safe-top));
+  right: 16px;
+  z-index: 201;
+  width: 42px;
+  height: 42px;
+  border-radius: 100%;
+  background: rgba(255,255,255,0.15);
+  color: #fff;
+  border: none;
+  font-size: 19px;
+  line-height: 1;
+}

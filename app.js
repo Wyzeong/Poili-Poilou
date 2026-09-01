@@ -2,13 +2,12 @@
    Vues : Accueil / Agenda / Clients / Fiche client / Réglages
    Toute la donnée passe par DB (db.js → IndexedDB). */
 
-const APP_VERSION = "1.37.1"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
+const APP_VERSION = "1.40.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
 
 const JOURS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
 const JOURS_COURT = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
 const MOIS = ["janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre", "novembre", "décembre"];
 const MOIS_COURT = ["janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "sept.", "oct.", "nov.", "déc."];
-const DOMICILE_ADRESSE = "41 avenue Maréchal Foch, 76290 Montivilliers";
 
 const state = {
   view: "accueil",
@@ -156,10 +155,29 @@ async function render() {
 async function renderAccueil() {
   const rdvs = await DB.listRendezvous();
   const todayISO = toISO(new Date());
-  const upcoming = rdvs.filter((r) => r.date >= todayISO).length;
+  const upcoming = rdvs.filter((r) => r.date >= todayISO && r.statut !== "honore").length;
+
+  const byYear = {};
+  rdvs.forEach((r) => {
+    const y = r.date.slice(0, 4);
+    if (!byYear[y]) byYear[y] = { honores: 0, restants: 0 };
+    if (r.statut === "honore") byYear[y].honores++;
+    else byYear[y].restants++;
+  });
+  const years = Object.keys(byYear).sort();
+  const yearBreakdown = years
+    .map((y) => {
+      const { honores, restants } = byYear[y];
+      const parts = [];
+      if (honores > 0) parts.push(`${honores} honoré${honores > 1 ? "s" : ""}`);
+      parts.push(`${restants} restant${restants > 1 ? "s" : ""}`);
+      return `${y} : ${parts.join(", ")}`;
+    })
+    .join(" · ");
 
   root.innerHTML = `
     <p class="home-greeting">${upcoming > 0 ? `${upcoming} rendez-vous à venir` : "Aucun rendez-vous planifié pour l'instant"}</p>
+    ${yearBreakdown ? `<p class="home-greeting-sub">${yearBreakdown}</p>` : ""}
     <div class="home-buttons">
       <button class="home-btn accent" data-nav="agenda">
         <span class="hb-icon"><svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M7 2v2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-2V2h-2v2H9V2H7zM5 9h14v11H5V9z"/></svg></span>
@@ -556,12 +574,19 @@ async function renderAgendaSearchHtml(query) {
 }
 
 // ---------- Optimisation de trajet ----------
+async function getDomicileAdresse() {
+  return DB.getParam("domicileAdresse", "");
+}
 async function getDomicileCoords() {
+  const addr = await getDomicileAdresse();
+  if (!addr) return null;
   const cached = await DB.getParam("domicileCoords", null);
-  if (cached && cached.lat != null) return cached;
-  const coords = await geocodeAddress(DOMICILE_ADRESSE);
-  if (coords) await DB.setParam("domicileCoords", coords);
-  return coords;
+  if (cached && cached.lat != null && cached.forAddress === addr) return cached;
+  const coords = await geocodeAddress(addr);
+  if (!coords) return null;
+  const toStore = { ...coords, forAddress: addr };
+  await DB.setParam("domicileCoords", toStore);
+  return toStore;
 }
 
 function getCurrentPosition() {
@@ -576,12 +601,13 @@ function getCurrentPosition() {
 }
 
 async function optimizeDay(dateISO) {
+  const domicileAdresse = await getDomicileAdresse();
   openSheet(`
     <h2>Point de départ</h2>
     <p style="color:var(--smoke);font-size:13px;margin:-6px 0 14px;">D'où pars-tu pour cette tournée ? Les périodes Matin et Après-midi sont calculées séparément, puis tu reviens au domicile entre les deux (et à la fin).</p>
     <button class="choice-tile" id="opt-domicile">
       <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 3l9 8h-3v9h-5v-6H11v6H6v-9H3z"/></svg>
-      <span>Domicile<span class="sub">${DOMICILE_ADRESSE}</span></span>
+      <span>Domicile<span class="sub">${domicileAdresse || "Non configurée — appuie ici pour la renseigner dans Réglages"}</span></span>
     </button>
     <button class="choice-tile" id="opt-gps">
       <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 2a1 1 0 0 1 1 1v1.06A8 8 0 0 1 20 12a1 1 0 1 1 0 2 8 8 0 0 1-7 6.94V22a1 1 0 1 1-2 0v-1.06A8 8 0 0 1 4 14a1 1 0 1 1 0-2 8 8 0 0 1 7-6.94V3a1 1 0 0 1 1-1zm0 5.5A4.5 4.5 0 1 0 12 16a4.5 4.5 0 0 0 0-8.5zm0 2.5a2 2 0 1 1 0 4 2 2 0 0 1 0-4z"/></svg>
@@ -594,6 +620,7 @@ async function optimizeDay(dateISO) {
   `);
 
   document.getElementById("opt-domicile").onclick = async () => {
+    if (!domicileAdresse) { closeSheet(); toast("Renseigne d'abord l'adresse du domicile dans Réglages"); navigate("reglages"); return; }
     closeSheet();
     toast("Localisation du domicile…");
     const coords = await getDomicileCoords();
@@ -1219,9 +1246,19 @@ async function renderBrandStats() {
 async function renderReglages() {
   const clientsSansGeo = (await DB.listClients()).filter((c) => c.adresse && c.lat == null).length;
   const recapEmail = await DB.getParam("recapEmail", "");
+  const currentTheme = await DB.getParam("theme", "light");
+  const domicileAdresseVal = await getDomicileAdresse();
 
   root.innerHTML = `
     <h2 class="view-heading">Réglages</h2>
+
+    <div class="info-block">
+      <h3>Apparence</h3>
+      <div class="pill-choice" id="f-theme">
+        <button type="button" data-val="light" class="${currentTheme === "light" ? "active period-active" : ""}">☀️ Clair</button>
+        <button type="button" data-val="dark" class="${currentTheme === "dark" ? "active period-active" : ""}">🌙 Sombre</button>
+      </div>
+    </div>
 
     <div class="info-block">
       <h3>À propos</h3>
@@ -1237,18 +1274,22 @@ async function renderReglages() {
     </div>
 
     <div class="info-block">
-      <h3>Marques installées</h3>
-      <p style="font-size:12.5px;color:var(--smoke);margin:0 0 12px;">Part de chaque marque parmi les fiches clients. Les orthographes proches (ex : "Extraflamme"/"Extraflame") sont regroupées automatiquement.</p>
-      <div id="brand-stats"></div>
-    </div>
-
-    <div class="info-block">
       <h3>Récapitulatif RDV honorés</h3>
       <div class="form-row" style="margin-bottom:8px;">
         <label for="recap-email-input">Adresse e-mail du destinataire</label>
         <input type="email" id="recap-email-input" value="${escapeHtml(recapEmail)}" placeholder="exemple@email.com" />
       </div>
       <button class="btn-primary" id="save-recap-email" style="width:100%;">Enregistrer</button>
+    </div>
+
+    <div class="info-block">
+      <h3>Adresse du domicile</h3>
+      <p style="font-size:12.5px;color:var(--smoke);margin:0 0 10px;">Utilisée comme point de départ/retour pour le calcul des trajets optimisés.</p>
+      <div class="form-row" style="margin-bottom:8px;">
+        <label for="domicile-input">Adresse</label>
+        <input type="text" id="domicile-input" value="${escapeHtml(domicileAdresseVal)}" placeholder="Ex : 12 rue des Fleurs, 76290 Montivilliers" />
+      </div>
+      <button class="btn-primary" id="save-domicile" style="width:100%;">Enregistrer</button>
     </div>
 
     <div class="info-block">
@@ -1266,7 +1307,29 @@ async function renderReglages() {
       <h3>Google Agenda (lecture seule)</h3>
       <div id="calendar-status"></div>
     </div>
+
+    <div class="info-block">
+      <h3>Marques installées</h3>
+      <p style="font-size:12.5px;color:var(--smoke);margin:0 0 12px;">Part de chaque marque parmi les fiches clients. Les orthographes proches (ex : "Extraflamme"/"Extraflame") sont regroupées automatiquement.</p>
+      <div id="brand-stats"></div>
+    </div>
   `;
+
+  document.getElementById("save-domicile").onclick = async () => {
+    const val = document.getElementById("domicile-input").value.trim();
+    await DB.setParam("domicileAdresse", val);
+    await DB.setParam("domicileCoords", null); // force un re-géocodage avec la nouvelle adresse
+    toast("Adresse du domicile enregistrée");
+  };
+
+  document.querySelectorAll("#f-theme button").forEach((b) => {
+    b.onclick = async () => {
+      document.querySelectorAll("#f-theme button").forEach((x) => x.classList.remove("active", "period-active"));
+      b.classList.add("active", "period-active");
+      await DB.setParam("theme", b.dataset.val);
+      applyTheme(b.dataset.val);
+    };
+  });
 
   document.getElementById("save-recap-email").onclick = async () => {
     await DB.setParam("recapEmail", document.getElementById("recap-email-input").value.trim());
@@ -1917,6 +1980,26 @@ function closeSheet() {
   sheetContent.innerHTML = "";
 }
 sheetBackdrop.onclick = closeSheet;
+
+// ---------- Visionneuse photo plein écran ----------
+const photoLightbox = document.getElementById("photo-lightbox");
+const lightboxImg = document.getElementById("lightbox-img");
+function openPhotoLightbox(src) {
+  lightboxImg.src = src;
+  photoLightbox.hidden = false;
+}
+function closePhotoLightbox() {
+  photoLightbox.hidden = true;
+  lightboxImg.src = "";
+}
+document.getElementById("lightbox-close-btn").onclick = closePhotoLightbox;
+photoLightbox.addEventListener("click", (e) => { if (e.target === photoLightbox) closePhotoLightbox(); });
+// Écoute déléguée : fonctionne pour toutes les vignettes (fiche client, RDV honoré,
+// historique d'intervention) sans avoir à câbler chaque emplacement séparément.
+document.addEventListener("click", (e) => {
+  const img = e.target.closest(".photo-thumb img");
+  if (img) openPhotoLightbox(img.src);
+});
 
 // Glissement horizontal sur toute la vue Agenda pour changer de semaine (écouté une
 // seule fois sur le conteneur principal, qui couvre toujours toute la hauteur visible
@@ -2931,6 +3014,17 @@ if ("serviceWorker" in navigator) {
   });
 }
 
+// ---------- Thème (clair / sombre) ----------
+async function applyTheme(theme) {
+  document.documentElement.setAttribute("data-theme", theme);
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.setAttribute("content", theme === "dark" ? "#241F19" : "#F4EFE3");
+}
+async function initTheme() {
+  const theme = await DB.getParam("theme", "light");
+  applyTheme(theme);
+}
+
 // ---------- Démarrage ----------
 async function migratePeriodeNonPrecisee() {
   const done = await DB.getParam("migrationPeriodeApresmidi", false);
@@ -2946,6 +3040,7 @@ async function migratePeriodeNonPrecisee() {
   if (state.view === "agenda") refreshAgendaBody();
 }
 
+initTheme();
 history.replaceState(historySnapshot(), "", "#accueil");
 render();
 maybeAutoCloudBackup();

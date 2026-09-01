@@ -2,7 +2,7 @@
    Vues : Accueil / Agenda / Clients / Fiche client / Réglages
    Toute la donnée passe par DB (db.js → IndexedDB). */
 
-const APP_VERSION = "1.40.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
+const APP_VERSION = "1.42.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
 
 const JOURS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
 const JOURS_COURT = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
@@ -203,19 +203,27 @@ async function renderAccueil() {
         </span>
         <svg class="hb-chev" viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </button>
-      <button class="home-btn" data-nav="reglages">
-        <span class="hb-icon"><svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M19.4 13a7.5 7.5 0 0 0 0-2l2-1.6-2-3.4-2.4 1a7.6 7.6 0 0 0-1.7-1L15 3h-4l-.3 2.5a7.6 7.6 0 0 0-1.7 1l-2.4-1-2 3.4L6.6 11a7.5 7.5 0 0 0 0 2l-2 1.6 2 3.4 2.4-1a7.6 7.6 0 0 0 1.7 1L11 21h4l.3-2.5a7.6 7.6 0 0 0 1.7-1l2.4 1 2-3.4-2-1.6zM13 15.5A3.5 3.5 0 1 1 13 8.5a3.5 3.5 0 0 1 0 7z"/></svg></span>
-        <span class="hb-text">
-          <span class="hb-title">Réglages</span>
-          <span class="hb-sub">Version, sauvegarde, point de départ</span>
-        </span>
-        <svg class="hb-chev" viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      </button>
       <button class="home-btn" data-nav="recap-honores">
         <span class="hb-icon"><svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M4 4h16v12H7l-3 3V4zm2 3h12v2H6V7zm0 4h8v2H6v-2z"/></svg></span>
         <span class="hb-text">
           <span class="hb-title">Récapitulatif RDV honorés</span>
           <span class="hb-sub">Envoyer le résumé de la semaine</span>
+        </span>
+        <svg class="hb-chev" viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <button class="home-btn" data-nav="devis">
+        <span class="hb-icon"><svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M6 2h9l5 5v15H6V2zm8 1.5V8h4.5L14 3.5zM8 12h8v2H8v-2zm0 4h8v2H8v-2z"/></svg></span>
+        <span class="hb-text">
+          <span class="hb-title">Demande de devis</span>
+          <span class="hb-sub">Envoyer les éléments d'un devis</span>
+        </span>
+        <svg class="hb-chev" viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <button class="home-btn" data-nav="reglages">
+        <span class="hb-icon"><svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M19.4 13a7.5 7.5 0 0 0 0-2l2-1.6-2-3.4-2.4 1a7.6 7.6 0 0 0-1.7-1L15 3h-4l-.3 2.5a7.6 7.6 0 0 0-1.7 1l-2.4-1-2 3.4L6.6 11a7.5 7.5 0 0 0 0 2l-2 1.6 2 3.4 2.4-1a7.6 7.6 0 0 0 1.7 1L11 21h4l.3-2.5a7.6 7.6 0 0 0 1.7-1l2.4 1 2-3.4-2-1.6zM13 15.5A3.5 3.5 0 1 1 13 8.5a3.5 3.5 0 0 1 0 7z"/></svg></span>
+        <span class="hb-text">
+          <span class="hb-title">Réglages</span>
+          <span class="hb-sub">Version, sauvegarde, point de départ</span>
         </span>
         <svg class="hb-chev" viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </button>
@@ -227,6 +235,7 @@ async function renderAccueil() {
   root.querySelector('[data-nav="reglages"]').onclick = () => navigate("reglages");
   root.querySelector('[data-nav="rdv-new"]').onclick = () => openRdvForm();
   root.querySelector('[data-nav="recap-honores"]').onclick = () => openRecapHonores();
+  root.querySelector('[data-nav="devis"]').onclick = () => openDevisForm();
 }
 
 // ---------- Récapitulatif RDV honorés (facturation) ----------
@@ -944,7 +953,8 @@ async function renderFiche() {
                 <span class="hist-type ${h.type === "entretien" ? "type-entretien" : "type-depannage"}">${h.type === "entretien" ? "Entretien" : "Dépannage"}</span>
                 <span class="hist-date">${fmtDateFR(h.date)}</span>
               </div>
-              ${h.description ? `<p class="hist-desc">${escapeHtml(h.description)}</p>` : ""}
+              ${h.compteRendu ? `<p class="hist-desc">${escapeHtml(h.compteRendu)}</p>` : ""}
+              ${h.description ? `<p class="hist-desc" style="color:var(--smoke);font-size:12px;">💳 ${escapeHtml(h.description)}</p>` : ""}
               ${photoGridHtml(h.photos, false)}
               <div class="hist-actions">
                 <button class="link-btn" data-edit-hist="${h.id}">Modifier</button>
@@ -1052,7 +1062,7 @@ function buildClientShareText(c, historique) {
   } else {
     historique.forEach((h) => {
       const typeLabel = h.type === "entretien" ? "Entretien" : "Dépannage";
-      lines.push(`- ${fmtDateFR(h.date)} — ${typeLabel}${h.description ? " : " + h.description : ""}`);
+      lines.push(`- ${fmtDateFR(h.date)} — ${typeLabel}${h.compteRendu ? " : " + h.compteRendu : (h.description ? " : " + h.description : "")}`);
     });
   }
   return lines.join("\n");
@@ -1248,6 +1258,7 @@ async function renderReglages() {
   const recapEmail = await DB.getParam("recapEmail", "");
   const currentTheme = await DB.getParam("theme", "light");
   const domicileAdresseVal = await getDomicileAdresse();
+  const devisTelVal = await DB.getParam("devisTelephone", "");
 
   root.innerHTML = `
     <h2 class="view-heading">Réglages</h2>
@@ -1287,9 +1298,19 @@ async function renderReglages() {
       <p style="font-size:12.5px;color:var(--smoke);margin:0 0 10px;">Utilisée comme point de départ/retour pour le calcul des trajets optimisés.</p>
       <div class="form-row" style="margin-bottom:8px;">
         <label for="domicile-input">Adresse</label>
-        <input type="text" id="domicile-input" value="${escapeHtml(domicileAdresseVal)}" placeholder="Ex : 12 rue des Fleurs, 76290 Montivilliers" />
+        <input type="text" id="domicile-input" value="${escapeHtml(domicileAdresseVal)}" placeholder="Ex : 12 rue des Fleurs, 68000 Colmar" />
       </div>
       <button class="btn-primary" id="save-domicile" style="width:100%;">Enregistrer</button>
+    </div>
+
+    <div class="info-block">
+      <h3>Demande de devis</h3>
+      <p style="font-size:12.5px;color:var(--smoke);margin:0 0 10px;">Numéro de téléphone destinataire des SMS envoyés depuis "Demande de devis".</p>
+      <div class="form-row" style="margin-bottom:8px;">
+        <label for="devis-tel-input">Téléphone</label>
+        <input type="tel" id="devis-tel-input" value="${escapeHtml(devisTelVal)}" placeholder="Ex : 0612345678" />
+      </div>
+      <button class="btn-primary" id="save-devis-tel" style="width:100%;">Enregistrer</button>
     </div>
 
     <div class="info-block">
@@ -1320,6 +1341,11 @@ async function renderReglages() {
     await DB.setParam("domicileAdresse", val);
     await DB.setParam("domicileCoords", null); // force un re-géocodage avec la nouvelle adresse
     toast("Adresse du domicile enregistrée");
+  };
+
+  document.getElementById("save-devis-tel").onclick = async () => {
+    await DB.setParam("devisTelephone", document.getElementById("devis-tel-input").value.trim());
+    toast("Numéro enregistré");
   };
 
   document.querySelectorAll("#f-theme button").forEach((b) => {
@@ -1981,16 +2007,36 @@ function closeSheet() {
 }
 sheetBackdrop.onclick = closeSheet;
 
-// ---------- Visionneuse photo plein écran ----------
+// ---------- Visionneuse photo plein écran (avec pincer-zoomer réel) ----------
 const photoLightbox = document.getElementById("photo-lightbox");
 const lightboxImg = document.getElementById("lightbox-img");
+const lightboxScroll = document.querySelector(".lightbox-scroll");
+
+let lbScale = 1, lbPanX = 0, lbPanY = 0;
+let lbStartDist = 0, lbStartScale = 1;
+let lbStartTouchX = 0, lbStartTouchY = 0;
+let lbLastTapTime = 0;
+
+function lbApplyTransform() {
+  lightboxImg.style.transform = `translate(${lbPanX}px, ${lbPanY}px) scale(${lbScale})`;
+}
+function lbResetZoom() {
+  lbScale = 1; lbPanX = 0; lbPanY = 0;
+  lbApplyTransform();
+}
+function lbDist(t0, t1) {
+  return Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY);
+}
+
 function openPhotoLightbox(src) {
   lightboxImg.src = src;
+  lbResetZoom();
   photoLightbox.hidden = false;
 }
 function closePhotoLightbox() {
   photoLightbox.hidden = true;
   lightboxImg.src = "";
+  lbResetZoom();
 }
 document.getElementById("lightbox-close-btn").onclick = closePhotoLightbox;
 photoLightbox.addEventListener("click", (e) => { if (e.target === photoLightbox) closePhotoLightbox(); });
@@ -2000,6 +2046,43 @@ document.addEventListener("click", (e) => {
   const img = e.target.closest(".photo-thumb img");
   if (img) openPhotoLightbox(img.src);
 });
+
+lightboxScroll.addEventListener("touchstart", (e) => {
+  if (e.touches.length === 2) {
+    lbStartDist = lbDist(e.touches[0], e.touches[1]);
+    lbStartScale = lbScale;
+  } else if (e.touches.length === 1) {
+    lbStartTouchX = e.touches[0].clientX - lbPanX;
+    lbStartTouchY = e.touches[0].clientY - lbPanY;
+  }
+}, { passive: true });
+
+lightboxScroll.addEventListener("touchmove", (e) => {
+  if (e.touches.length === 2) {
+    e.preventDefault();
+    const newDist = lbDist(e.touches[0], e.touches[1]);
+    lbScale = Math.min(5, Math.max(1, lbStartScale * (newDist / lbStartDist)));
+    lbApplyTransform();
+  } else if (e.touches.length === 1 && lbScale > 1) {
+    e.preventDefault();
+    lbPanX = e.touches[0].clientX - lbStartTouchX;
+    lbPanY = e.touches[0].clientY - lbStartTouchY;
+    lbApplyTransform();
+  }
+}, { passive: false });
+
+lightboxScroll.addEventListener("touchend", (e) => {
+  if (e.touches.length > 0) return;
+  if (lbScale <= 1.02) { lbResetZoom(); }
+  if (e.changedTouches.length === 1) {
+    const now = Date.now();
+    if (now - lbLastTapTime < 300) {
+      // Double-tap : zoom rapide avant/arrière
+      if (lbScale > 1) { lbResetZoom(); } else { lbScale = 2.5; lbApplyTransform(); }
+    }
+    lbLastTapTime = now;
+  }
+}, { passive: true });
 
 // Glissement horizontal sur toute la vue Agenda pour changer de semaine (écouté une
 // seule fois sur le conteneur principal, qui couvre toujours toute la hauteur visible
@@ -2303,6 +2386,94 @@ async function computeNearbyByPosition(coords, horizonDays, radiusKm = 20) {
 }
 
 // ---------- Formulaire rendez-vous ----------
+// ---------- Demande de devis ----------
+function buildDevisSmsBody(c, marque, modele, contenu) {
+  const lines = [
+    "Coucou Matthieu, j'espère que tu vas bien ?",
+    `Je t'envoie les éléments pour le devis de ${clientFullName(c)}, ${c.adresse || "adresse non renseignée"}, ${c.telephone || "téléphone non renseigné"}, ${c.email || "e-mail non renseigné"}.`,
+    `Concernant ${marque || "marque non renseignée"}${modele ? ", " + modele : ""}`,
+    contenu || "(contenu du devis non renseigné)",
+    "Bonne journée, boujou",
+    "Dis moi s'il manque quelque chose",
+  ];
+  return lines.join("\n");
+}
+
+async function openDevisForm() {
+  const clients = await DB.listClients();
+  const devisTel = await DB.getParam("devisTelephone", "");
+
+  openSheet(`
+    <h2>Demande de devis</h2>
+    <div class="form-row">
+      <label>Client</label>
+      <input type="text" id="devis-search" placeholder="Rechercher un client…" style="width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:10px;font-size:15px;background:var(--surface);color:var(--ink);" />
+      <div id="devis-search-results"></div>
+      <div id="devis-selected" class="client-picker-selected"></div>
+    </div>
+    <div id="devis-details"></div>
+    <div class="sheet-actions">
+      <button class="btn-secondary" id="cancel-btn" style="width:100%;">Fermer</button>
+    </div>
+  `);
+
+  const searchInput = document.getElementById("devis-search");
+  const resultsEl = document.getElementById("devis-search-results");
+  const selectedEl = document.getElementById("devis-selected");
+  const detailsEl = document.getElementById("devis-details");
+
+  function renderDetails(c) {
+    detailsEl.innerHTML = `
+      <div class="info-block">
+        <h3>Coordonnées</h3>
+        <div class="info-row"><span class="k">Adresse</span><span class="v">${escapeHtml(c.adresse || "—")}</span></div>
+        <div class="info-row"><span class="k">Téléphone</span><span class="v">${escapeHtml(c.telephone || "—")}</span></div>
+        <div class="info-row"><span class="k">E-mail</span><span class="v">${escapeHtml(c.email || "—")}</span></div>
+      </div>
+      <div class="form-row-2">
+        <div class="form-row" style="margin-bottom:8px;"><label>Marque</label><input type="text" id="devis-marque" value="${escapeAttr(c.marque || "")}" /></div>
+        <div class="form-row" style="margin-bottom:8px;"><label>Modèle</label><input type="text" id="devis-modele" value="${escapeAttr(c.modele || "")}" /></div>
+      </div>
+      <div class="form-row">
+        <label>Contenu du devis</label>
+        <textarea id="devis-contenu" placeholder="Ex : pièce à changer, intervention facturée, déplacement..."></textarea>
+      </div>
+      <button class="btn-primary" id="devis-send-sms" style="width:100%;margin-top:10px;">Envoyer par SMS</button>
+    `;
+    document.getElementById("devis-send-sms").onclick = () => {
+      if (!devisTel) { toast("Renseigne d'abord le numéro dans Réglages → Demande de devis"); return; }
+      const marque = document.getElementById("devis-marque").value.trim();
+      const modele = document.getElementById("devis-modele").value.trim();
+      const contenu = document.getElementById("devis-contenu").value.trim();
+      const body = buildDevisSmsBody(c, marque, modele, contenu);
+      window.location.href = `sms:${devisTel}?body=${encodeURIComponent(body)}`;
+    };
+  }
+
+  searchInput.oninput = () => {
+    const q = normalizeForMatch(searchInput.value.trim());
+    if (!q) { resultsEl.innerHTML = ""; return; }
+    const matches = clients.filter((c) => normalizeForMatch(clientFullName(c)).includes(q)).slice(0, 6);
+    resultsEl.innerHTML = matches.length
+      ? matches.map((c) => `<button type="button" class="client-picker-item" data-cid="${c.id}">
+          <span class="cpi-name">${clientBadge(c)}${escapeHtml(clientFullName(c))}</span>
+          ${c.adresse ? `<span class="cpi-detail">📍 ${escapeHtml(c.adresse)}</span>` : ""}
+        </button>`).join("")
+      : `<p class="near-hint">Aucun client trouvé.</p>`;
+    resultsEl.querySelectorAll("[data-cid]").forEach((btn) => {
+      btn.onclick = () => {
+        const c = clients.find((x) => x.id === btn.dataset.cid);
+        selectedEl.innerHTML = `<div class="client-picker-chip">${clientBadge(c)}${escapeHtml(clientFullName(c))}</div>`;
+        searchInput.value = "";
+        resultsEl.innerHTML = "";
+        renderDetails(c);
+      };
+    });
+  };
+
+  document.getElementById("cancel-btn").onclick = closeSheet;
+}
+
 async function openRdvForm(prefill = {}, existing) {
   const clients = await DB.listClients();
   const r = existing || {};
@@ -2356,7 +2527,7 @@ async function openRdvForm(prefill = {}, existing) {
     <div id="near-container"></div>
     <div class="info-block" style="margin-top:2px;">
       <h3>Proposer une date selon le secteur</h3>
-      <input type="text" id="f-sector-input" placeholder="Ville ou adresse (ex : Étretat)" style="width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:10px;font-size:15px;background:var(--surface);color:var(--ink);margin-bottom:10px;" />
+      <input type="text" id="f-sector-input" placeholder="Ville ou adresse (ex : Colmar)" style="width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:10px;font-size:15px;background:var(--surface);color:var(--ink);margin-bottom:10px;" />
       <div class="form-row" style="margin-bottom:10px;">
         <label>Rayon de recherche</label>
         <div style="display:flex;align-items:center;gap:12px;">
@@ -2412,8 +2583,8 @@ async function openRdvForm(prefill = {}, existing) {
           if (!hist.length) { historyEl.innerHTML = ""; return; }
           const sorted = hist.slice().sort((a, b) => b.date.localeCompare(a.date)).slice(0, 5);
           historyEl.innerHTML = `
-            <div class="near-hint" style="margin:8px 0 4px;">Historique chez ce client :</div>
-            ${sorted.map((h) => `<div class="near-hint" style="margin:0 0 2px;">• ${fmtDateFR(h.date)} — ${h.type === "entretien" ? "Entretien" : "Dépannage"}</div>`).join("")}
+            <div class="near-hint" style="margin:8px 0 4px;">Historique d'intervention chez ce client :</div>
+            ${sorted.map((h) => `<div class="near-hint" style="margin:0 0 4px;">• ${fmtDateFR(h.date)} — ${h.type === "entretien" ? "Entretien" : "Dépannage"}${h.compteRendu ? ` — Commentaire : ${escapeHtml(h.compteRendu)}` : ""}</div>`).join("")}
           `;
         });
       }
@@ -2699,13 +2870,9 @@ async function openHonoreForm(r, client) {
     <p style="color:var(--smoke);font-size:13px;margin:-8px 0 14px;">${client ? clientBadge(client) + escapeHtml(clientFullName(client)) : ""} — ${fmtDateFR(r.date)}</p>
     <p style="font-size:13.5px;color:var(--ink-dim);margin:0 0 14px;">Ce rendez-vous sera ajouté à l'historique du client.</p>
     <div class="form-row">
-      <label>Mode de paiement</label>
-      <div class="pill-choice" id="f-paiement-mode">
-        <button type="button" data-val="cheque" class="${mode === "cheque" ? "active period-active" : ""}">Chèque</button>
-        <button type="button" data-val="virement" class="${mode === "virement" ? "active period-active" : ""}">Virement bancaire</button>
-      </div>
+      <label>Compte-rendu d'intervention (facultatif)</label>
+      <textarea id="f-compte-rendu" placeholder="Ex : prévoir changement moteur, joint de porte à revoir...">${escapeHtml(r.compteRendu || "")}</textarea>
     </div>
-    <div id="paiement-details"></div>
     <div class="form-row">
       <label>Photos (facultatif)</label>
       <div id="honore-photos-grid"></div>
@@ -2716,6 +2883,14 @@ async function openHonoreForm(r, client) {
         <button type="button" class="btn-secondary" id="honore-photo-add-btn">🖼️ Choisir dans la galerie</button>
       </div>
     </div>
+    <div class="form-row">
+      <label>Mode de paiement</label>
+      <div class="pill-choice" id="f-paiement-mode">
+        <button type="button" data-val="cheque" class="${mode === "cheque" ? "active period-active" : ""}">Chèque</button>
+        <button type="button" data-val="virement" class="${mode === "virement" ? "active period-active" : ""}">Virement bancaire</button>
+      </div>
+    </div>
+    <div id="paiement-details"></div>
     <div class="sheet-actions">
       <button class="btn-secondary" id="cancel-btn">Annuler</button>
       <button class="btn-primary" id="confirm-btn">Valider</button>
@@ -2823,11 +2998,13 @@ async function openHonoreForm(r, client) {
       clientId: r.clientId,
       date: r.date,
       type: r.type,
+      compteRendu: document.getElementById("f-compte-rendu").value.trim(),
       description: formatPaiementLines(paiement).join(" / "),
       photos: honorePhotos,
     });
     r.statut = "honore";
     r.paiement = paiement;
+    r.compteRendu = document.getElementById("f-compte-rendu").value.trim();
     // On fige ici le statut "nouveau client" tel qu'il était au moment de CE rendez-vous —
     // le récapitulatif s'appuiera toujours sur cette valeur figée, jamais sur l'état
     // actuel de la fiche (qui, lui, bascule juste après pour les prochaines fois).

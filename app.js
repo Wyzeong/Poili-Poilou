@@ -2,7 +2,7 @@
    Vues : Accueil / Agenda / Clients / Fiche client / Réglages
    Toute la donnée passe par DB (db.js → IndexedDB). */
 
-const APP_VERSION = "1.42.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
+const APP_VERSION = "1.42.1"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
 
 const JOURS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
 const JOURS_COURT = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
@@ -253,6 +253,7 @@ async function buildRecapData(startISO, endISO) {
     const entry = {
       nomLigne: recapNameLine(c),
       adresse: (c && c.adresse) || r.adresse || "",
+      email: (c && c.email) || "",
       marque: (c && c.marque) || "",
       modele: (c && c.modele) || "",
       raison: r.type === "entretien" ? "Entretien" : "Dépannage",
@@ -280,6 +281,7 @@ function formatRecapEntry(e) {
   const lines = [
     `${e.nomLigne} :`,
     e.adresse || "(adresse non renseignée)",
+    `E-mail : ${e.email || "—"}`,
     `Raison : ${e.raison}`,
     `Marque : ${e.marque || "—"}`,
     `Modèle : ${e.modele || "—"}`,

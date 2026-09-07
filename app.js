@@ -2,7 +2,7 @@
    Vues : Accueil / Agenda / Clients / Fiche client / Réglages
    Toute la donnée passe par DB (db.js → IndexedDB). */
 
-const APP_VERSION = "1.45.2"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
+const APP_VERSION = "1.46.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
 
 const JOURS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
 const JOURS_COURT = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
@@ -2142,13 +2142,21 @@ async function getCustomEvents() {
   return (await DB.getParam("customEvents", [])) || [];
 }
 async function getCustomEventsForDate(iso) {
-  return (await getCustomEvents()).filter((e) => e.date === iso);
+  return (await getCustomEvents()).filter((e) => {
+    const start = e.startDate || e.date;
+    const end = e.endDate || start;
+    return iso >= start && iso <= end;
+  });
 }
 function openCustomEventForm() {
+  const today = toISO(new Date());
   openSheet(`
     <h2>Ajouter un événement</h2>
     <p style="color:var(--smoke);font-size:13px;margin:-6px 0 14px;">Un repère personnel affiché dans l'agenda, comme les événements Google Agenda ou les vacances scolaires (jamais synchronisé nulle part).</p>
-    <div class="form-row"><label>Date</label><input type="date" id="f-event-date" value="${toISO(new Date())}" /></div>
+    <div class="form-row-2">
+      <div class="form-row"><label>Du</label><input type="date" id="f-event-start" value="${today}" /></div>
+      <div class="form-row"><label>Au (facultatif)</label><input type="date" id="f-event-end" /></div>
+    </div>
     <div class="form-row">
       <label>Moment</label>
       <div class="pill-choice pill-3" id="f-event-periode">
@@ -2173,11 +2181,13 @@ function openCustomEventForm() {
   });
   document.getElementById("cancel-btn").onclick = closeSheet;
   document.getElementById("save-btn").onclick = async () => {
-    const date = document.getElementById("f-event-date").value;
+    const startDate = document.getElementById("f-event-start").value;
+    const endDate = document.getElementById("f-event-end").value || startDate;
     const title = document.getElementById("f-event-title").value.trim();
-    if (!date || !title) { toast("Renseigne une date et un titre"); return; }
+    if (!startDate || !title) { toast("Renseigne une date et un titre"); return; }
+    if (endDate < startDate) { toast("La date de fin doit être après la date de début"); return; }
     const events = await getCustomEvents();
-    events.push({ id: uid(), date, title, periode: selEventPeriode });
+    events.push({ id: uid(), startDate, endDate, title, periode: selEventPeriode });
     await DB.setParam("customEvents", events);
     closeSheet();
     toast("Événement ajouté ✓");

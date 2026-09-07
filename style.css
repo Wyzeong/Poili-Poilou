@@ -130,6 +130,7 @@ button { font-family: inherit; }
   max-width: 640px;
   margin: 0 auto;
   min-height: 100%;
+  position: relative;
 }
 .view-heading {
   font-family: var(--font-display);
@@ -139,6 +140,14 @@ button { font-family: inherit; }
 }
 
 /* ---------- Accueil ---------- */
+.home-version {
+  position: absolute;
+  top: 18px;
+  right: 16px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--smoke);
+}
 .home-greeting {
   color: var(--smoke);
   font-size: 13.5px;

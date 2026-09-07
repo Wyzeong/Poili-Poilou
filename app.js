@@ -2,7 +2,7 @@
    Vues : Accueil / Agenda / Clients / Fiche client / Réglages
    Toute la donnée passe par DB (db.js → IndexedDB). */
 
-const APP_VERSION = "1.44.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
+const APP_VERSION = "1.45.2"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
 
 const JOURS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
 const JOURS_COURT = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
@@ -500,7 +500,7 @@ async function refreshAgendaBody() {
       </div>
       ${holiday ? `<div class="holiday-chip">🏖️ ${escapeHtml(holiday)}</div>` : ""}
       ${calEvents.map((ev) => `<div class="cal-chip">📅 ${ev.time ? escapeHtml(ev.time) + " · " : ""}${escapeHtml(ev.title)}</div>`).join("")}
-      ${customEvents.map((ev) => `<div class="cal-chip cal-chip-custom" data-custom-event="${ev.id}" data-custom-title="${escapeAttr(ev.title)}">📌 ${escapeHtml(ev.title)}</div>`).join("")}
+      ${customEvents.map((ev) => `<div class="cal-chip cal-chip-custom" data-custom-event="${ev.id}" data-custom-title="${escapeAttr(ev.title)}">📌 ${ev.periode ? `<strong>${ev.periode === "matin" ? "Matin" : "Après-midi"}</strong> · ` : ""}${escapeHtml(ev.title)}</div>`).join("")}
       ${pendingCount >= 2 ? `<button class="day-col-optimize" data-optimize="${iso}" title="Optimiser les trajets">
         <svg viewBox="0 0 24 24" width="13" height="13"><path fill="currentColor" d="M12 2c1 3-1 4-1 6 0 1.2 1 2 2 2 1.3 0 2-1 2-2.2 1.6 1.4 3 3.7 3 6.2a6 6 0 0 1-12 0c0-2.6 1.1-4.3 2.3-6C9.2 6.3 10.5 4.4 12 2Z"/></svg>
       </button>` : ""}
@@ -2149,19 +2149,35 @@ function openCustomEventForm() {
     <h2>Ajouter un événement</h2>
     <p style="color:var(--smoke);font-size:13px;margin:-6px 0 14px;">Un repère personnel affiché dans l'agenda, comme les événements Google Agenda ou les vacances scolaires (jamais synchronisé nulle part).</p>
     <div class="form-row"><label>Date</label><input type="date" id="f-event-date" value="${toISO(new Date())}" /></div>
+    <div class="form-row">
+      <label>Moment</label>
+      <div class="pill-choice pill-3" id="f-event-periode">
+        <button type="button" data-val="" class="active period-active">Toute la journée</button>
+        <button type="button" data-val="matin">Matin</button>
+        <button type="button" data-val="apres-midi">Après-midi</button>
+      </div>
+    </div>
     <div class="form-row"><label>Titre</label><input type="text" id="f-event-title" placeholder="Ex : Anniversaire, Congés, Salon..." /></div>
     <div class="sheet-actions">
       <button class="btn-secondary" id="cancel-btn">Annuler</button>
       <button class="btn-primary" id="save-btn">Ajouter</button>
     </div>
   `);
+  let selEventPeriode = "";
+  document.querySelectorAll("#f-event-periode button").forEach((b) => {
+    b.onclick = () => {
+      selEventPeriode = b.dataset.val;
+      document.querySelectorAll("#f-event-periode button").forEach((x) => x.classList.remove("active", "period-active"));
+      b.classList.add("active", "period-active");
+    };
+  });
   document.getElementById("cancel-btn").onclick = closeSheet;
   document.getElementById("save-btn").onclick = async () => {
     const date = document.getElementById("f-event-date").value;
     const title = document.getElementById("f-event-title").value.trim();
     if (!date || !title) { toast("Renseigne une date et un titre"); return; }
     const events = await getCustomEvents();
-    events.push({ id: uid(), date, title });
+    events.push({ id: uid(), date, title, periode: selEventPeriode });
     await DB.setParam("customEvents", events);
     closeSheet();
     toast("Événement ajouté ✓");
@@ -2723,8 +2739,16 @@ async function openRdvForm(prefill = {}, existing) {
     if (!el) return;
     const dateVal = document.getElementById("f-date").value;
     const events = await getCalendarEventsForDate(dateVal);
-    el.innerHTML = events.length
-      ? `<p class="geo-status geo-pending" style="margin:4px 0 8px;">⚠️ Google Agenda ce jour-là : ${events.map((e) => `${e.time ? escapeHtml(e.time) + " " : ""}${escapeHtml(e.title)}`).join(", ")}</p>`
+    const customEvents = await getCustomEventsForDate(dateVal);
+    const parts = [];
+    if (events.length) {
+      parts.push(`Google Agenda : ${events.map((e) => `${e.time ? escapeHtml(e.time) + " " : ""}${escapeHtml(e.title)}`).join(", ")}`);
+    }
+    if (customEvents.length) {
+      parts.push(`Événement ajouté : ${customEvents.map((e) => `${e.periode ? (e.periode === "matin" ? "Matin — " : "Après-midi — ") : ""}${escapeHtml(e.title)}`).join(", ")}`);
+    }
+    el.innerHTML = parts.length
+      ? `<p class="holiday-alert holiday-alert-ember">⚠️ ${parts.join(" · ")}</p>`
       : "";
   }
   function refreshHolidayWarning() {
@@ -2733,7 +2757,7 @@ async function openRdvForm(prefill = {}, existing) {
     const dateVal = document.getElementById("f-date").value;
     const holiday = getZoneBHoliday(dateVal);
     el.innerHTML = holiday
-      ? `<p class="geo-status geo-pending" style="margin:4px 0 8px;">🏖️ Ce jour tombe pendant les vacances de ${escapeHtml(holiday)} (zone B)</p>`
+      ? `<p class="holiday-alert">🏖️ Ce jour tombe pendant les vacances de ${escapeHtml(holiday)}</p>`
       : "";
   }
   document.getElementById("f-date").onchange = () => { refreshNearby(); refreshCalendarWarning(); refreshHolidayWarning(); };

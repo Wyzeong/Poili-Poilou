@@ -987,3 +987,21 @@ input[type="checkbox"] { accent-color: var(--ember); width: 18px; height: 18px; 
   font-size: 19px;
   line-height: 1;
 }
+
+/* ---------- Rappel vacances scolaires (prise de RDV) ---------- */
+.holiday-alert {
+  margin: 6px 0 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--amber-wash);
+  border: 2px solid var(--amber);
+  color: var(--amber);
+  font-size: 14.5px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+.holiday-alert-ember {
+  background: var(--ember-wash);
+  border-color: var(--ember);
+  color: var(--ember-strong);
+}

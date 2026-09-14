@@ -2,7 +2,7 @@
    Vues : Accueil / Agenda / Clients / Fiche client / Réglages
    Toute la donnée passe par DB (db.js → IndexedDB). */
 
-const APP_VERSION = "1.48.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
+const APP_VERSION = "1.49.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
 
 const JOURS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
 const JOURS_COURT = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
@@ -355,7 +355,6 @@ async function maybeStaleCalendarWarning() {
 // ---------- Vue Agenda (colonnes semaine, façon Google Agenda) ----------
 async function renderAgenda() {
   root.innerHTML = `
-    <div id="agenda-client-panel" hidden></div>
     <input type="text" class="search-bar" id="agenda-search" placeholder="Rechercher un client dans l'agenda…" value="${escapeHtml(state.agendaSearch)}" />
     <div id="calendar-sync-status"></div>
     <div id="agenda-body"></div>
@@ -364,26 +363,6 @@ async function renderAgenda() {
   input.oninput = () => { state.agendaSearch = input.value; refreshAgendaBody(); };
   await renderCalendarSyncStatusLine();
   await refreshAgendaBody();
-}
-
-async function showAgendaClientPanel(clientId) {
-  const panel = document.getElementById("agenda-client-panel");
-  if (!panel) return;
-  const client = await DB.getClient(clientId);
-  if (!client) { panel.hidden = true; panel.innerHTML = ""; return; }
-  panel.innerHTML = `
-    <div class="agenda-client-panel-head">
-      <span>${clientBadge(client)}${escapeHtml(clientFullName(client))}</span>
-      <button type="button" id="agenda-client-panel-close" aria-label="Fermer">✕</button>
-    </div>
-    <div class="agenda-client-panel-scroll">
-      ${await buildClientFicheSummaryHtml(client)}
-    </div>
-  `;
-  panel.hidden = false;
-  document.getElementById("agenda-client-panel-close").onclick = () => { panel.hidden = true; panel.innerHTML = ""; };
-  const openFullFicheBtn = panel.querySelector("#open-full-fiche-btn");
-  if (openFullFicheBtn) openFullFicheBtn.onclick = () => navigate("fiche", client.id);
 }
 
 function fmtRelativeTime(iso) {
@@ -547,10 +526,7 @@ async function refreshAgendaBody() {
   };
 
   container.querySelectorAll("[data-rdv-chip]").forEach((el) => {
-    el.onclick = () => {
-      openRdvDetail(el.dataset.rdvChip);
-      if (el.dataset.clientId) showAgendaClientPanel(el.dataset.clientId);
-    };
+    el.onclick = () => openRdvDetail(el.dataset.rdvChip);
   });
   container.querySelectorAll("[data-optimize]").forEach((el) => {
     el.onclick = () => optimizeDay(el.dataset.optimize);
@@ -2990,6 +2966,8 @@ async function openRdvDetail(id) {
     ${client && client.commentaires ? `<p style="font-size:13.5px;color:var(--ember);background:var(--ember-wash);border-radius:9px;padding:9px 11px;margin:6px 0;">⚠️ ${escapeHtml(client.commentaires)}</p>` : ""}
     ${r.statut === "honore" ? `<p style="font-size:13.5px;color:var(--ink-dim);margin:0 0 4px;">📝 ${(r.paiement ? formatPaiementLines(r.paiement) : (r.compteRenduHonore ? [r.compteRenduHonore] : ["⚠️ Paiement non renseigné"])).map(escapeHtml).join(" — ")}</p>` : (r.commentaire ? `<p style="font-size:13.5px;color:var(--ink-dim);margin:0 0 4px;">${escapeHtml(r.commentaire)}</p>` : "")}
 
+    ${client ? `<div class="sheet-fiche-scroll">${await buildClientFicheSummaryHtml(client)}</div>` : ""}
+
     <div class="quick-actions">
       <a class="qa-btn" href="${wazeUrl || "#"}" ${wazeUrl ? "" : 'aria-disabled="true"'}>
         <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 2C6.5 2 2 5.8 2 10.5c0 2.4 1.2 4.6 3.2 6.1-.2.9-.7 2-1.4 2.8-.2.2 0 .6.3.6 1.4-.1 3-.6 4-1.2 1.2.4 2.5.6 3.9.6 5.5 0 10-3.8 10-8.9S17.5 2 12 2z"/></svg>
@@ -3017,6 +2995,8 @@ async function openRdvDetail(id) {
   `);
 
   document.getElementById("edit-btn").onclick = () => openRdvForm({}, r);
+  const openFullFicheBtn = document.getElementById("open-full-fiche-btn");
+  if (openFullFicheBtn) openFullFicheBtn.onclick = () => { closeSheet(); navigate("fiche", client.id); };
   document.getElementById("del-btn").onclick = async () => {
     await DB.deleteRendezvous(r.id);
     closeSheet();

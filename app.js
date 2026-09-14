@@ -2,7 +2,7 @@
    Vues : Accueil / Agenda / Clients / Fiche client / Réglages
    Toute la donnée passe par DB (db.js → IndexedDB). */
 
-const APP_VERSION = "1.49.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
+const APP_VERSION = "1.50.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
 
 const JOURS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
 const JOURS_COURT = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
@@ -2887,13 +2887,17 @@ async function openRdvForm(prefill = {}, existing) {
   }
 }
 
-async function openRdvConfirmSheet(item, client) {
-  const addr = item.adresse || client.adresse || "";
+function buildRdvConfirmSmsHref(item, client) {
+  const addr = item.adresse || (client && client.adresse) || "";
   const periodeTxt = item.periode === "matin" ? " le matin" : item.periode === "apres-midi" ? " l'après-midi" : "";
   const smsBody = encodeURIComponent(
     `Bonjour, suite à votre appel je vous confirme la prise d'un rendez-vous pour un ${item.type === "entretien" ? "entretien" : "dépannage"}${addr ? " à l'adresse " + addr : ""} le ${fmtDateFullFR(item.date)}${periodeTxt}, bonne journée !`
   );
-  const smsHref = client.telephone ? `sms:${client.telephone.replace(/\s+/g, "")}?body=${smsBody}` : null;
+  return client && client.telephone ? `sms:${client.telephone.replace(/\s+/g, "")}?body=${smsBody}` : null;
+}
+
+async function openRdvConfirmSheet(item, client) {
+  const smsHref = buildRdvConfirmSmsHref(item, client);
 
   openSheet(`
     <h2>Rendez-vous créé ✓</h2>
@@ -2987,6 +2991,7 @@ async function openRdvDetail(id) {
       </a>
     </div>
 
+    ${(() => { const recapHref = client ? buildRdvConfirmSmsHref(r, client) : null; return recapHref ? `<a class="btn-secondary" href="${recapHref}" style="display:block;text-align:center;text-decoration:none;padding:13px;border-radius:12px;margin-bottom:10px;">🔁 Renvoyer SMS récapitulatif</a>` : ""; })()}
     ${r.statut === "honore" ? "" : '<button class="btn-primary" id="honore-btn" style="width:100%;margin-bottom:10px;">✓ RDV honoré</button>'}
     <div class="sheet-actions">
       <button class="btn-secondary" id="edit-btn">Modifier</button>

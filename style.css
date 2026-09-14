@@ -654,8 +654,8 @@ button { font-family: inherit; }
 }
 .info-row { display: flex; justify-content: space-between; gap: 12px; padding: 5px 0; font-size: 14px; }
 .info-row + .info-row { border-top: 1px solid var(--line); }
-.info-row .k { color: var(--smoke); }
-.info-row .v { text-align: right; font-weight: 500; }
+.info-row .k { color: var(--smoke); flex: 0 0 auto; }
+.info-row .v { text-align: right; font-weight: 500; min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
 .comment-text { font-size: 14px; line-height: 1.5; white-space: pre-wrap; }
 
 .hist-item { border-bottom: 1px solid var(--line); padding: 12px 2px; }

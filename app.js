@@ -2,7 +2,7 @@
    Vues : Accueil / Agenda / Clients / Fiche client / Réglages
    Toute la donnée passe par DB (db.js → IndexedDB). */
 
-const APP_VERSION = "1.46.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
+const APP_VERSION = "1.47.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
 
 const JOURS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
 const JOURS_COURT = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
@@ -2917,6 +2917,40 @@ async function openRdvDetail(id) {
   const smsBody = client ? encodeURIComponent("Bonjour, ETS Gallay, je suis en route pour notre rendez-vous. À tout de suite.") : "";
   const smsHref = client && client.telephone ? `sms:${client.telephone.replace(/\s+/g, "")}?body=${smsBody}` : null;
   const period = periodLabel(r.periode);
+  const clientHistorique = client ? await DB.listInterventionsForClient(client.id) : [];
+
+  const clientFicheHtml = client ? `
+    <div class="info-block">
+      <h3>Coordonnées</h3>
+      <div class="info-row"><span class="k">Téléphone</span><span class="v">${client.telephone ? `<a href="tel:${client.telephone.replace(/\s+/g, "")}" style="color:inherit;text-decoration:underline;">${escapeHtml(client.telephone)}</a>` : "—"}</span></div>
+      ${client.telephone2 ? `<div class="info-row"><span class="k">Téléphone secondaire</span><span class="v"><a href="tel:${client.telephone2.replace(/\s+/g, "")}" style="color:inherit;text-decoration:underline;">${escapeHtml(client.telephone2)}</a></span></div>` : ""}
+      ${client.email ? `<div class="info-row"><span class="k">E-mail</span><span class="v">${escapeHtml(client.email)}</span></div>` : ""}
+      <div class="info-row"><span class="k">Nouveau client</span><span class="v">${nouveauClientLabel(client)}</span></div>
+    </div>
+    ${(client.marque || client.modele || client.infosComplementaires) ? `
+    <div class="info-block">
+      <h3>Installation</h3>
+      ${client.marque ? `<div class="info-row"><span class="k">Marque</span><span class="v">${escapeHtml(client.marque)}</span></div>` : ""}
+      ${client.modele ? `<div class="info-row"><span class="k">Modèle</span><span class="v">${escapeHtml(client.modele)}</span></div>` : ""}
+      ${client.infosComplementaires ? `<div class="info-row"><span class="k">Infos</span><span class="v">${escapeHtml(client.infosComplementaires)}</span></div>` : ""}
+    </div>` : ""}
+    ${client.photos && client.photos.length ? `<div class="info-block"><h3>Photos</h3>${photoGridHtml(client.photos, false)}</div>` : ""}
+    <div class="info-block">
+      <h3>Historique d'intervention</h3>
+      ${clientHistorique.length === 0 ? '<p style="color:var(--smoke);font-size:13.5px;margin:4px 0;">Aucune intervention enregistrée.</p>' :
+        clientHistorique.slice().sort((a, b) => b.date.localeCompare(a.date)).map((h) => `
+          <div class="hist-item">
+            <div class="hist-top">
+              <span class="hist-type ${h.type === "entretien" ? "type-entretien" : "type-depannage"}">${h.type === "entretien" ? "Entretien" : "Dépannage"}</span>
+              <span class="hist-date">${fmtDateFR(h.date)}</span>
+            </div>
+            ${h.compteRendu ? `<p class="hist-desc">${escapeHtml(h.compteRendu)}</p>` : ""}
+            ${h.description ? `<p class="hist-desc" style="color:var(--smoke);font-size:12px;">💳 ${escapeHtml(h.description)}</p>` : ""}
+            ${photoGridHtml(h.photos, false)}
+          </div>`).join("")}
+    </div>
+    <button class="btn-secondary" id="open-full-fiche-btn" style="width:100%;margin-bottom:10px;">Ouvrir la fiche complète</button>
+  ` : "";
 
   openSheet(`
     <h2>${client ? clientBadge(client) + escapeHtml(clientFullName(client)) : "Rendez-vous"}</h2>
@@ -2924,6 +2958,8 @@ async function openRdvDetail(id) {
     ${addr ? `<p style="font-size:13.5px;color:var(--ink-dim);margin:0 0 4px;">📍 ${escapeHtml(addr)}</p>` : ""}
     ${client && client.commentaires ? `<p style="font-size:13.5px;color:var(--ember);background:var(--ember-wash);border-radius:9px;padding:9px 11px;margin:6px 0;">⚠️ ${escapeHtml(client.commentaires)}</p>` : ""}
     ${r.statut === "honore" ? `<p style="font-size:13.5px;color:var(--ink-dim);margin:0 0 4px;">📝 ${(r.paiement ? formatPaiementLines(r.paiement) : (r.compteRenduHonore ? [r.compteRenduHonore] : ["⚠️ Paiement non renseigné"])).map(escapeHtml).join(" — ")}</p>` : (r.commentaire ? `<p style="font-size:13.5px;color:var(--ink-dim);margin:0 0 4px;">${escapeHtml(r.commentaire)}</p>` : "")}
+
+    ${clientFicheHtml}
 
     <div class="quick-actions">
       <a class="qa-btn" href="${wazeUrl || "#"}" ${wazeUrl ? "" : 'aria-disabled="true"'}>
@@ -2952,6 +2988,8 @@ async function openRdvDetail(id) {
   `);
 
   document.getElementById("edit-btn").onclick = () => openRdvForm({}, r);
+  const openFullFicheBtn = document.getElementById("open-full-fiche-btn");
+  if (openFullFicheBtn) openFullFicheBtn.onclick = () => { closeSheet(); navigate("fiche", client.id); };
   document.getElementById("del-btn").onclick = async () => {
     await DB.deleteRendezvous(r.id);
     closeSheet();

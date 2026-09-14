@@ -2,7 +2,7 @@
    Vues : Accueil / Agenda / Clients / Fiche client / Réglages
    Toute la donnée passe par DB (db.js → IndexedDB). */
 
-const APP_VERSION = "1.47.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
+const APP_VERSION = "1.48.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
 
 const JOURS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
 const JOURS_COURT = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
@@ -355,6 +355,7 @@ async function maybeStaleCalendarWarning() {
 // ---------- Vue Agenda (colonnes semaine, façon Google Agenda) ----------
 async function renderAgenda() {
   root.innerHTML = `
+    <div id="agenda-client-panel" hidden></div>
     <input type="text" class="search-bar" id="agenda-search" placeholder="Rechercher un client dans l'agenda…" value="${escapeHtml(state.agendaSearch)}" />
     <div id="calendar-sync-status"></div>
     <div id="agenda-body"></div>
@@ -363,6 +364,26 @@ async function renderAgenda() {
   input.oninput = () => { state.agendaSearch = input.value; refreshAgendaBody(); };
   await renderCalendarSyncStatusLine();
   await refreshAgendaBody();
+}
+
+async function showAgendaClientPanel(clientId) {
+  const panel = document.getElementById("agenda-client-panel");
+  if (!panel) return;
+  const client = await DB.getClient(clientId);
+  if (!client) { panel.hidden = true; panel.innerHTML = ""; return; }
+  panel.innerHTML = `
+    <div class="agenda-client-panel-head">
+      <span>${clientBadge(client)}${escapeHtml(clientFullName(client))}</span>
+      <button type="button" id="agenda-client-panel-close" aria-label="Fermer">✕</button>
+    </div>
+    <div class="agenda-client-panel-scroll">
+      ${await buildClientFicheSummaryHtml(client)}
+    </div>
+  `;
+  panel.hidden = false;
+  document.getElementById("agenda-client-panel-close").onclick = () => { panel.hidden = true; panel.innerHTML = ""; };
+  const openFullFicheBtn = panel.querySelector("#open-full-fiche-btn");
+  if (openFullFicheBtn) openFullFicheBtn.onclick = () => navigate("fiche", client.id);
 }
 
 function fmtRelativeTime(iso) {
@@ -526,7 +547,10 @@ async function refreshAgendaBody() {
   };
 
   container.querySelectorAll("[data-rdv-chip]").forEach((el) => {
-    el.onclick = () => openRdvDetail(el.dataset.rdvChip);
+    el.onclick = () => {
+      openRdvDetail(el.dataset.rdvChip);
+      if (el.dataset.clientId) showAgendaClientPanel(el.dataset.clientId);
+    };
   });
   container.querySelectorAll("[data-optimize]").forEach((el) => {
     el.onclick = () => optimizeDay(el.dataset.optimize);
@@ -555,7 +579,7 @@ function renderRdvChip(r, clientMap, domicile) {
   const typeBadgeClass = r.type === "entretien" ? "type-badge-entretien" : "type-badge-depannage";
   const typeBadgeLabel = r.type === "entretien" ? "Entretien" : "Dépannage";
 
-  return `<button class="rdv-chip ${chipClass}" data-rdv-chip="${r.id}">
+  return `<button class="rdv-chip ${chipClass}" data-rdv-chip="${r.id}" data-client-id="${r.clientId || ""}">
     <div class="chip-top-row">
       <span class="type-badge ${typeBadgeClass}">${typeBadgeLabel}</span>
       ${honore ? '<span class="chip-period">✓</span>' : ""}
@@ -2906,22 +2930,15 @@ async function openRdvConfirmSheet(item, client) {
 }
 
 // ---------- Détail rendez-vous (RDV honoré / modifier / supprimer) ----------
-async function openRdvDetail(id) {
-  const r = await DB.getRendezvous(id);
-  if (!r) return;
-  const client = await DB.getClient(r.clientId);
-  const addr = (client && client.adresse) || r.adresse || "";
-  const mapsUrl = addr ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(addr)}` : null;
-  const wazeUrl = addr ? `https://waze.com/ul?q=${encodeURIComponent(addr)}&navigate=yes` : null;
-  const telHref = client && client.telephone ? `tel:${client.telephone.replace(/\s+/g, "")}` : null;
-  const smsBody = client ? encodeURIComponent("Bonjour, ETS Gallay, je suis en route pour notre rendez-vous. À tout de suite.") : "";
-  const smsHref = client && client.telephone ? `sms:${client.telephone.replace(/\s+/g, "")}?body=${smsBody}` : null;
-  const period = periodLabel(r.periode);
-  const clientHistorique = client ? await DB.listInterventionsForClient(client.id) : [];
-
-  const clientFicheHtml = client ? `
+// Construit un résumé de fiche client (coordonnées, installation, photos, historique),
+// réutilisé à la fois par le panneau au-dessus de l'agenda.
+async function buildClientFicheSummaryHtml(client) {
+  if (!client) return "";
+  const clientHistorique = await DB.listInterventionsForClient(client.id);
+  return `
     <div class="info-block">
       <h3>Coordonnées</h3>
+      <div class="info-row"><span class="k">Adresse</span><span class="v">${escapeHtml(client.adresse || "—")}</span></div>
       <div class="info-row"><span class="k">Téléphone</span><span class="v">${client.telephone ? `<a href="tel:${client.telephone.replace(/\s+/g, "")}" style="color:inherit;text-decoration:underline;">${escapeHtml(client.telephone)}</a>` : "—"}</span></div>
       ${client.telephone2 ? `<div class="info-row"><span class="k">Téléphone secondaire</span><span class="v"><a href="tel:${client.telephone2.replace(/\s+/g, "")}" style="color:inherit;text-decoration:underline;">${escapeHtml(client.telephone2)}</a></span></div>` : ""}
       ${client.email ? `<div class="info-row"><span class="k">E-mail</span><span class="v">${escapeHtml(client.email)}</span></div>` : ""}
@@ -2934,6 +2951,7 @@ async function openRdvDetail(id) {
       ${client.modele ? `<div class="info-row"><span class="k">Modèle</span><span class="v">${escapeHtml(client.modele)}</span></div>` : ""}
       ${client.infosComplementaires ? `<div class="info-row"><span class="k">Infos</span><span class="v">${escapeHtml(client.infosComplementaires)}</span></div>` : ""}
     </div>` : ""}
+    ${client.commentaires ? `<div class="info-block"><h3>Commentaires</h3><p class="comment-text">${escapeHtml(client.commentaires)}</p></div>` : ""}
     ${client.photos && client.photos.length ? `<div class="info-block"><h3>Photos</h3>${photoGridHtml(client.photos, false)}</div>` : ""}
     <div class="info-block">
       <h3>Historique d'intervention</h3>
@@ -2949,8 +2967,21 @@ async function openRdvDetail(id) {
             ${photoGridHtml(h.photos, false)}
           </div>`).join("")}
     </div>
-    <button class="btn-secondary" id="open-full-fiche-btn" style="width:100%;margin-bottom:10px;">Ouvrir la fiche complète</button>
-  ` : "";
+    <button class="btn-secondary" id="open-full-fiche-btn" style="width:100%;">Ouvrir la fiche complète</button>
+  `;
+}
+
+async function openRdvDetail(id) {
+  const r = await DB.getRendezvous(id);
+  if (!r) return;
+  const client = await DB.getClient(r.clientId);
+  const addr = (client && client.adresse) || r.adresse || "";
+  const mapsUrl = addr ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(addr)}` : null;
+  const wazeUrl = addr ? `https://waze.com/ul?q=${encodeURIComponent(addr)}&navigate=yes` : null;
+  const telHref = client && client.telephone ? `tel:${client.telephone.replace(/\s+/g, "")}` : null;
+  const smsBody = client ? encodeURIComponent("Bonjour, ETS Gallay, je suis en route pour notre rendez-vous. À tout de suite.") : "";
+  const smsHref = client && client.telephone ? `sms:${client.telephone.replace(/\s+/g, "")}?body=${smsBody}` : null;
+  const period = periodLabel(r.periode);
 
   openSheet(`
     <h2>${client ? clientBadge(client) + escapeHtml(clientFullName(client)) : "Rendez-vous"}</h2>
@@ -2958,8 +2989,6 @@ async function openRdvDetail(id) {
     ${addr ? `<p style="font-size:13.5px;color:var(--ink-dim);margin:0 0 4px;">📍 ${escapeHtml(addr)}</p>` : ""}
     ${client && client.commentaires ? `<p style="font-size:13.5px;color:var(--ember);background:var(--ember-wash);border-radius:9px;padding:9px 11px;margin:6px 0;">⚠️ ${escapeHtml(client.commentaires)}</p>` : ""}
     ${r.statut === "honore" ? `<p style="font-size:13.5px;color:var(--ink-dim);margin:0 0 4px;">📝 ${(r.paiement ? formatPaiementLines(r.paiement) : (r.compteRenduHonore ? [r.compteRenduHonore] : ["⚠️ Paiement non renseigné"])).map(escapeHtml).join(" — ")}</p>` : (r.commentaire ? `<p style="font-size:13.5px;color:var(--ink-dim);margin:0 0 4px;">${escapeHtml(r.commentaire)}</p>` : "")}
-
-    ${clientFicheHtml}
 
     <div class="quick-actions">
       <a class="qa-btn" href="${wazeUrl || "#"}" ${wazeUrl ? "" : 'aria-disabled="true"'}>
@@ -2988,8 +3017,6 @@ async function openRdvDetail(id) {
   `);
 
   document.getElementById("edit-btn").onclick = () => openRdvForm({}, r);
-  const openFullFicheBtn = document.getElementById("open-full-fiche-btn");
-  if (openFullFicheBtn) openFullFicheBtn.onclick = () => { closeSheet(); navigate("fiche", client.id); };
   document.getElementById("del-btn").onclick = async () => {
     await DB.deleteRendezvous(r.id);
     closeSheet();

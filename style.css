@@ -1062,3 +1062,52 @@ input[type="checkbox"] { accent-color: var(--ember); width: 18px; height: 18px; 
   font-size: 15px;
   padding: 4px 6px;
 }
+
+/* ---------- Champ avec suffixe grisé (€ HT) ---------- */
+.input-suffix-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.input-suffix-wrap input { padding-right: 52px; width: 100%; }
+.input-suffix-wrap .input-suffix {
+  position: absolute;
+  right: 12px;
+  color: var(--smoke);
+  font-size: 12.5px;
+  pointer-events: none;
+}
+
+/* ---------- Compteur ± (nombre de chèques, etc.) ---------- */
+.stepper {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.stepper button {
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--ink);
+  font-size: 19px;
+  font-weight: 600;
+  line-height: 1;
+}
+.stepper span {
+  font-family: var(--font-mono);
+  font-size: 17px;
+  font-weight: 700;
+  min-width: 20px;
+  text-align: center;
+}
+
+/* ---------- Pop-up de sélection d'article ---------- */
+.article-picker-box {
+  background: var(--bg-elevated);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px 14px;
+  margin-top: 8px;
+}

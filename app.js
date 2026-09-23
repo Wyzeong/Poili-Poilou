@@ -2,7 +2,7 @@
    Vues : Accueil / Agenda / Clients / Fiche client / Réglages
    Toute la donnée passe par DB (db.js → IndexedDB). */
 
-const APP_VERSION = "1.51.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
+const APP_VERSION = "1.52.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
 
 const JOURS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
 const JOURS_COURT = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
@@ -3108,6 +3108,43 @@ async function openRdvDetail(id) {
   if (honoreBtn) honoreBtn.onclick = () => openHonoreForm(r, client);
 }
 
+// Propose de supprimer le commentaire de la FICHE CLIENT (souvent un pense-bête devenu
+// inutile une fois le rendez-vous honoré) — jamais le compte-rendu ni le paiement.
+function maybeOfferDeleteClientComment(client) {
+  return new Promise((resolve) => {
+    if (!client || !client.commentaires) { resolve(); return; }
+    const commentaireActuel = client.commentaires;
+    openSheet(`
+      <h2>Supprimer le commentaire ?</h2>
+      <p style="font-size:13.5px;color:var(--ember);background:var(--ember-wash);border-radius:9px;padding:9px 11px;margin:0 0 14px;">⚠️ ${escapeHtml(commentaireActuel)}</p>
+      <p style="font-size:13.5px;color:var(--ink-dim);margin:0 0 16px;">Ce commentaire de la fiche client a peut-être servi de pense-bête pour ce rendez-vous. Le retirer maintenant ?</p>
+      <div class="sheet-actions">
+        <button class="btn-secondary" id="keep-comment-btn">Non</button>
+        <button class="btn-danger" id="del-comment-btn">Oui</button>
+      </div>
+    `);
+    document.getElementById("keep-comment-btn").onclick = () => { closeSheet(); resolve(); };
+    document.getElementById("del-comment-btn").onclick = () => {
+      openSheet(`
+        <h2>Es-tu sûr ?</h2>
+        <p style="font-size:14px;color:var(--smoke);margin:-6px 0 16px;">Le commentaire sera définitivement supprimé de la fiche de ${escapeHtml(clientFullName(client))}.</p>
+        <div class="sheet-actions">
+          <button class="btn-secondary" id="cancel-del-comment-btn">Annuler</button>
+          <button class="btn-danger" id="confirm-del-comment-btn">Supprimer</button>
+        </div>
+      `);
+      document.getElementById("cancel-del-comment-btn").onclick = () => { closeSheet(); resolve(); };
+      document.getElementById("confirm-del-comment-btn").onclick = async () => {
+        const fresh = await DB.getClient(client.id);
+        if (fresh) { fresh.commentaires = ""; await DB.saveClient(fresh); }
+        closeSheet();
+        toast("Commentaire supprimé");
+        resolve();
+      };
+    };
+  });
+}
+
 async function openHonoreForm(r, client) {
   let mode = (r.paiement && r.paiement.mode) || "cheque";
   let cheques = (r.paiement && r.paiement.mode === "cheque" && r.paiement.cheques && r.paiement.cheques.length)
@@ -3136,13 +3173,22 @@ async function openHonoreForm(r, client) {
     <div class="info-block">
       <h3>Montant</h3>
       <div class="form-row-2">
-        <div class="form-row" style="margin-bottom:8px;"><label>Entretien (€ HT)</label><input type="text" inputmode="decimal" id="f-entretien-ht" value="${escapeAttr(montant.entretienHT)}" /></div>
-        <div class="form-row" style="margin-bottom:8px;"><label>Main d'œuvre (€ HT)</label><input type="text" inputmode="decimal" id="f-mainoeuvre-ht" value="${escapeAttr(montant.mainOeuvreHT)}" /></div>
+        <div class="form-row" style="margin-bottom:8px;">
+          <label>Entretien</label>
+          <div class="input-suffix-wrap"><input type="text" inputmode="decimal" id="f-entretien-ht" value="${escapeAttr(montant.entretienHT)}" /><span class="input-suffix">€ HT</span></div>
+        </div>
+        <div class="form-row" style="margin-bottom:8px;">
+          <label>Main d'œuvre</label>
+          <div class="input-suffix-wrap"><input type="text" inputmode="decimal" id="f-mainoeuvre-ht" value="${escapeAttr(montant.mainOeuvreHT)}" /><span class="input-suffix">€ HT</span></div>
+        </div>
       </div>
       <label style="display:block;font-size:11px;text-transform:uppercase;letter-spacing:0.04em;color:var(--smoke);margin:14px 0 6px;">Articles / consommables</label>
-      <div id="montant-articles-checklist"></div>
-      <div id="montant-articles-custom"></div>
-      <button type="button" class="btn-secondary" id="add-custom-article-btn" style="width:100%;margin-top:8px;">+ Ajouter un article ponctuel (cette intervention uniquement)</button>
+      <div id="montant-articles-list"></div>
+      <div class="sheet-actions" style="margin-top:8px;">
+        <button type="button" class="btn-secondary" id="pick-article-btn">Ajouter un article</button>
+        <button type="button" class="btn-secondary" id="add-custom-article-btn">Ajouter un article ponctuel</button>
+      </div>
+      <div id="article-picker-popup" hidden></div>
       <div id="montant-total-display" style="margin-top:14px;padding:10px 12px;border-radius:10px;background:var(--surface-2);"></div>
     </div>
 
@@ -3191,87 +3237,89 @@ async function openHonoreForm(r, client) {
       <div class="info-row"><span class="k">Total HT</span><span class="v">${fmtMontant(t.totalHT)}€</span></div>
       <div class="info-row" style="border-top:1px solid var(--line);"><span class="k" style="font-weight:700;">Total TTC (TVA 10%)</span><span class="v" style="font-weight:700;color:var(--ember);">${fmtMontant(t.totalTTC)}€</span></div>
     `;
+    return t;
   }
 
-  function renderMontantChecklist() {
-    const el = document.getElementById("montant-articles-checklist");
-    if (articlesList.length === 0) {
-      el.innerHTML = `<p class="near-hint">Aucun article défini dans Réglages → Articles et consommables.</p>`;
+  // Liste unique des lignes déjà ajoutées (qu'elles viennent de la liste globale ou
+  // soient ponctuelles) — chacune modifiable et retirable.
+  function renderMontantArticlesList() {
+    const el = document.getElementById("montant-articles-list");
+    if (montant.articles.length === 0) {
+      el.innerHTML = `<p class="near-hint" style="margin:2px 0 0;">Aucun article ajouté.</p>`;
       return;
     }
-    el.innerHTML = articlesList.map((art) => {
-      const existing = montant.articles.find((a) => a.articleId === art.id);
-      const checked = !!existing;
-      const qte = existing ? existing.quantite : 1;
-      const prix = existing ? existing.prixHT : art.prixHT;
-      return `
-        <div class="montant-article-row" data-article-id="${art.id}">
-          <label class="chk" style="flex:1;min-width:0;">
-            <input type="checkbox" class="ma-check" ${checked ? "checked" : ""} />
-            <span style="word-break:break-word;">${escapeHtml(art.nom)}</span>
-          </label>
-          <input type="text" inputmode="numeric" class="ma-qty" value="${qte}" ${checked ? "" : "disabled"} />
-          <input type="text" inputmode="decimal" class="ma-prix" value="${escapeAttr(String(prix))}" ${checked ? "" : "disabled"} />
-        </div>
-      `;
-    }).join("");
-    el.querySelectorAll(".montant-article-row").forEach((row) => {
-      const artId = row.dataset.articleId;
-      const art = articlesList.find((a) => a.id === artId);
-      const checkEl = row.querySelector(".ma-check");
-      const qtyEl = row.querySelector(".ma-qty");
-      const prixEl = row.querySelector(".ma-prix");
-      function syncFromRow() {
-        montant.articles = montant.articles.filter((a) => a.articleId !== artId);
-        if (checkEl.checked) {
-          montant.articles.push({ articleId: artId, nom: art.nom, quantite: qtyEl.value, prixHT: prixEl.value });
-        }
-        refreshMontantTotal();
-      }
-      checkEl.onchange = () => { qtyEl.disabled = !checkEl.checked; prixEl.disabled = !checkEl.checked; syncFromRow(); };
-      qtyEl.oninput = syncFromRow;
-      prixEl.oninput = syncFromRow;
-    });
-  }
-
-  function renderCustomArticles() {
-    const el = document.getElementById("montant-articles-custom");
-    const isCustomOrOrphan = (a) => !a.articleId || !articlesList.some((art) => art.id === a.articleId);
-    const customs = montant.articles.filter(isCustomOrOrphan);
-    el.innerHTML = customs.map((a, i) => `
-      <div class="montant-article-row" data-custom-idx="${i}">
-        <input type="text" class="ma-custom-nom" value="${escapeAttr(a.nom)}" placeholder="Nom de l'article" style="flex:1;min-width:0;" />
+    el.innerHTML = montant.articles.map((a, i) => `
+      <div class="montant-article-row" data-idx="${i}">
+        ${a.articleId
+          ? `<span style="flex:1;min-width:0;word-break:break-word;">${escapeHtml(a.nom)}</span>`
+          : `<input type="text" class="ma-custom-nom" value="${escapeAttr(a.nom)}" placeholder="Nom de l'article" style="flex:1;min-width:0;" />`}
         <input type="text" inputmode="numeric" class="ma-qty" value="${escapeAttr(String(a.quantite))}" />
         <input type="text" inputmode="decimal" class="ma-prix" value="${escapeAttr(String(a.prixHT))}" />
         <button type="button" class="ma-remove" aria-label="Retirer">✕</button>
       </div>
     `).join("");
-    el.querySelectorAll("[data-custom-idx]").forEach((row) => {
-      const idx = parseInt(row.dataset.customIdx, 10);
-      const customEntries = montant.articles.filter(isCustomOrOrphan);
-      const target = customEntries[idx];
-      const globalIdx = montant.articles.indexOf(target);
-      row.querySelector(".ma-custom-nom").oninput = (e) => { montant.articles[globalIdx].nom = e.target.value; };
-      row.querySelector(".ma-qty").oninput = (e) => { montant.articles[globalIdx].quantite = e.target.value; refreshMontantTotal(); };
-      row.querySelector(".ma-prix").oninput = (e) => { montant.articles[globalIdx].prixHT = e.target.value; refreshMontantTotal(); };
+    el.querySelectorAll("[data-idx]").forEach((row) => {
+      const idx = parseInt(row.dataset.idx, 10);
+      const nomInput = row.querySelector(".ma-custom-nom");
+      if (nomInput) nomInput.oninput = (e) => { montant.articles[idx].nom = e.target.value; };
+      row.querySelector(".ma-qty").oninput = (e) => { montant.articles[idx].quantite = e.target.value; refreshMontantTotal(); };
+      row.querySelector(".ma-prix").oninput = (e) => { montant.articles[idx].prixHT = e.target.value; refreshMontantTotal(); };
       row.querySelector(".ma-remove").onclick = () => {
-        montant.articles.splice(globalIdx, 1);
-        renderCustomArticles();
+        montant.articles.splice(idx, 1);
+        renderMontantArticlesList();
         refreshMontantTotal();
       };
     });
   }
 
+  // Pop-up (panneau repliable dans le même volet) pour sélectionner un ou plusieurs
+  // articles de la liste globale d'un coup.
+  const pickerEl = document.getElementById("article-picker-popup");
+  function openArticlePicker() {
+    if (articlesList.length === 0) {
+      toast("Aucun article défini dans Réglages → Articles et consommables");
+      return;
+    }
+    const alreadyAddedIds = new Set(montant.articles.filter((a) => a.articleId).map((a) => a.articleId));
+    pickerEl.innerHTML = `
+      <div class="article-picker-box">
+        <p class="near-hint" style="margin:0 0 8px;">Sélectionne un ou plusieurs articles :</p>
+        ${articlesList.map((art) => `
+          <label class="chk" style="padding:6px 0;">
+            <input type="checkbox" class="picker-check" data-article-id="${art.id}" ${alreadyAddedIds.has(art.id) ? "checked disabled" : ""} />
+            ${escapeHtml(art.nom)} — ${escapeAttr(String(art.prixHT))}€ HT
+          </label>
+        `).join("")}
+        <div class="sheet-actions" style="margin-top:10px;">
+          <button type="button" class="btn-secondary" id="picker-cancel-btn">Annuler</button>
+          <button type="button" class="btn-primary" id="picker-confirm-btn">Ajouter</button>
+        </div>
+      </div>
+    `;
+    pickerEl.hidden = false;
+    document.getElementById("picker-cancel-btn").onclick = () => { pickerEl.hidden = true; pickerEl.innerHTML = ""; };
+    document.getElementById("picker-confirm-btn").onclick = () => {
+      pickerEl.querySelectorAll(".picker-check:not(:disabled):checked").forEach((cb) => {
+        const art = articlesList.find((a) => a.id === cb.dataset.articleId);
+        if (art) montant.articles.push({ articleId: art.id, nom: art.nom, quantite: "1", prixHT: String(art.prixHT) });
+      });
+      pickerEl.hidden = true;
+      pickerEl.innerHTML = "";
+      renderMontantArticlesList();
+      refreshMontantTotal();
+    };
+  }
+  document.getElementById("pick-article-btn").onclick = openArticlePicker;
+
   document.getElementById("add-custom-article-btn").onclick = () => {
     montant.articles.push({ articleId: null, nom: "", quantite: "1", prixHT: "0" });
-    renderCustomArticles();
+    renderMontantArticlesList();
     refreshMontantTotal();
   };
   document.getElementById("f-entretien-ht").oninput = refreshMontantTotal;
   document.getElementById("f-mainoeuvre-ht").oninput = refreshMontantTotal;
 
-  renderMontantChecklist();
-  renderCustomArticles();
+  renderMontantArticlesList();
   refreshMontantTotal();
 
   // ---------- Paiement (inchangé) ----------
@@ -3296,20 +3344,26 @@ async function openHonoreForm(r, client) {
       detailsEl.innerHTML = `
         <div class="form-row">
           <label>Nombre de chèques</label>
-          <input type="number" id="f-nb-cheques" min="1" max="6" value="${cheques.length}" />
+          <div class="stepper">
+            <button type="button" id="nb-cheques-down" aria-label="Moins">−</button>
+            <span id="nb-cheques-value">${cheques.length}</span>
+            <button type="button" id="nb-cheques-up" aria-label="Plus">+</button>
+          </div>
         </div>
         <div id="cheques-list"></div>
       `;
       renderChequesList();
-      document.getElementById("f-nb-cheques").onchange = (e) => {
+      function setNbCheques(n) {
         readChequesFromDOM();
-        let n = parseInt(e.target.value, 10);
-        if (!n || n < 1) n = 1;
+        if (n < 1) n = 1;
         if (n > 6) n = 6;
         while (cheques.length < n) cheques.push({ numero: "", montant: "", commentaire: "" });
         cheques = cheques.slice(0, n);
+        document.getElementById("nb-cheques-value").textContent = n;
         renderChequesList();
-      };
+      }
+      document.getElementById("nb-cheques-down").onclick = () => setNbCheques(cheques.length - 1);
+      document.getElementById("nb-cheques-up").onclick = () => setNbCheques(cheques.length + 1);
     } else {
       detailsEl.innerHTML = `
         <div class="form-row"><label>Montant du virement (€)</label><input type="text" inputmode="decimal" id="f-virement-montant" value="${escapeAttr(virement.montant)}" /></div>
@@ -3328,6 +3382,15 @@ async function openHonoreForm(r, client) {
         <div class="form-row"><label>Commentaire (facultatif)</label><input type="text" id="f-cheque-comment-${i}" value="${escapeAttr(c.commentaire)}" /></div>
       </div>
     `).join("");
+    // S'il n'y a qu'un seul chèque et qu'aucun montant n'a encore été saisi à la main,
+    // pré-remplit avec le total TTC calculé dans la section Montant, juste au-dessus.
+    if (cheques.length === 1 && !cheques[0].montant) {
+      const t = refreshMontantTotal();
+      if (t && t.totalTTC > 0) {
+        const input = document.getElementById("f-cheque-montant-0");
+        if (input) input.value = fmtMontant(t.totalTTC);
+      }
+    }
   }
 
   renderDetails();
@@ -3404,6 +3467,7 @@ async function openHonoreForm(r, client) {
     }
 
     closeSheet();
+    await maybeOfferDeleteClientComment(client);
     toast("Rendez-vous honoré, ajouté à l'historique");
     navigate("agenda");
   };

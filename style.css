@@ -1017,3 +1017,48 @@ input[type="checkbox"] { accent-color: var(--ember); width: 18px; height: 18px; 
   padding: 10px 12px;
   margin: 6px 0 14px;
 }
+
+/* ---------- Montant : articles/consommables (RDV honoré) ---------- */
+.montant-article-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--line);
+}
+.montant-article-row:last-child { border-bottom: none; }
+.montant-article-row .ma-qty {
+  width: 42px;
+  text-align: center;
+  padding: 7px 4px;
+  border-radius: 7px;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--ink);
+  font-family: inherit;
+}
+.montant-article-row .ma-prix {
+  width: 68px;
+  text-align: right;
+  padding: 7px 6px;
+  border-radius: 7px;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--ink);
+  font-family: inherit;
+}
+.montant-article-row .ma-custom-nom {
+  padding: 7px 8px;
+  border-radius: 7px;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--ink);
+  font-family: inherit;
+}
+.montant-article-row .ma-remove {
+  background: none;
+  border: none;
+  color: var(--danger);
+  font-size: 15px;
+  padding: 4px 6px;
+}

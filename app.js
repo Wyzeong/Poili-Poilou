@@ -2,7 +2,7 @@
    Vues : Accueil / Agenda / Clients / Fiche client / Réglages
    Toute la donnée passe par DB (db.js → IndexedDB). */
 
-const APP_VERSION = "1.50.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
+const APP_VERSION = "1.51.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
 
 const JOURS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
 const JOURS_COURT = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
@@ -133,7 +133,7 @@ function askExitConfirm() {
 
 async function render() {
   document.querySelectorAll(".tab-btn").forEach((b) => {
-    b.classList.toggle("active", b.dataset.view === state.view || (state.view === "fiche" && b.dataset.view === "clients"));
+    b.classList.toggle("active", b.dataset.view === state.view || (state.view === "fiche" && b.dataset.view === "clients") || (state.view.startsWith("reglages") && b.dataset.view === "reglages"));
   });
   btnBack.hidden = state.view === "accueil";
   btnBack.onclick = () => history.back();
@@ -146,6 +146,9 @@ async function render() {
   else if (state.view === "clients") await renderClients();
   else if (state.view === "fiche") await renderFiche();
   else if (state.view === "reglages") await renderReglages();
+  else if (state.view === "reglages-general") await renderReglagesGeneral();
+  else if (state.view === "reglages-articles") await renderReglagesArticles();
+  else if (state.view === "reglages-marques") await renderReglagesMarques();
   else if (state.view === "import") await renderImport();
 
   root.scrollTop = 0;
@@ -250,6 +253,7 @@ async function buildRecapData(startISO, endISO) {
   const habituels = [];
   for (const r of rdvs) {
     const c = cmap[r.clientId];
+    if (c && c.pastilleBleue) continue; // clients "pastille bleue" exclus du récapitulatif
     const entry = {
       nomLigne: recapNameLine(c),
       adresse: (c && c.adresse) || r.adresse || "",
@@ -257,6 +261,7 @@ async function buildRecapData(startISO, endISO) {
       marque: (c && c.marque) || "",
       modele: (c && c.modele) || "",
       raison: r.type === "entretien" ? "Entretien" : "Dépannage",
+      montant: r.montant || null,
       paiement: r.paiement || null,
       compteRendu: r.compteRenduHonore || "", // repli pour les RDV honorés avant l'ajout du formulaire structuré
     };
@@ -278,6 +283,7 @@ function recapNameLine(c) {
 
 function formatRecapEntry(e) {
   const paiementLines = e.paiement ? formatPaiementLines(e.paiement) : (e.compteRendu ? [e.compteRendu] : ["⚠️ Paiement non renseigné"]);
+  const montantLines = e.montant ? formatMontantLines(e.montant) : [];
   const lines = [
     `${e.nomLigne} :`,
     e.adresse || "(adresse non renseignée)",
@@ -285,6 +291,7 @@ function formatRecapEntry(e) {
     `Raison : ${e.raison}`,
     `Marque : ${e.marque || "—"}`,
     `Modèle : ${e.modele || "—"}`,
+    ...montantLines,
     ...paiementLines,
   ];
   return lines.join("\n");
@@ -1261,6 +1268,39 @@ async function renderBrandStats() {
 
 // ---------- Réglages ----------
 async function renderReglages() {
+  root.innerHTML = `
+    <h2 class="view-heading">Réglages</h2>
+    <button class="home-btn" data-nav="reglages-general">
+      <span class="hb-icon"><svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M19.4 13a7.5 7.5 0 0 0 0-2l2-1.6-2-3.4-2.4 1a7.6 7.6 0 0 0-1.7-1L15 3h-4l-.3 2.5a7.6 7.6 0 0 0-1.7 1l-2.4-1-2 3.4L6.6 11a7.5 7.5 0 0 0 0 2l-2 1.6 2 3.4 2.4-1a7.6 7.6 0 0 0 1.7 1L11 21h4l.3-2.5a7.6 7.6 0 0 0 1.7-1l2.4 1 2-3.4-2-1.6zM13 15.5A3.5 3.5 0 1 1 13 8.5a3.5 3.5 0 0 1 0 7z"/></svg></span>
+      <span class="hb-text">
+        <span class="hb-title">Général</span>
+        <span class="hb-sub">Apparence, domicile, sauvegarde, e-mail...</span>
+      </span>
+      <svg class="hb-chev" viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+    <button class="home-btn" data-nav="reglages-articles">
+      <span class="hb-icon"><svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M6 2h9l5 5v15H6V2zm8 1.5V8h4.5L14 3.5zM8 12h8v2H8v-2zm0 4h8v2H8v-2z"/></svg></span>
+      <span class="hb-text">
+        <span class="hb-title">Articles et consommables</span>
+        <span class="hb-sub">Liste des pièces et leur prix HT</span>
+      </span>
+      <svg class="hb-chev" viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+    <button class="home-btn" data-nav="reglages-marques">
+      <span class="hb-icon"><svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M12 2 2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg></span>
+      <span class="hb-text">
+        <span class="hb-title">Marques installées</span>
+        <span class="hb-sub">Comparatif des marques posées chez les clients</span>
+      </span>
+      <svg class="hb-chev" viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+  `;
+  root.querySelector('[data-nav="reglages-general"]').onclick = () => navigate("reglages-general");
+  root.querySelector('[data-nav="reglages-articles"]').onclick = () => navigate("reglages-articles");
+  root.querySelector('[data-nav="reglages-marques"]').onclick = () => navigate("reglages-marques");
+}
+
+async function renderReglagesGeneral() {
   const clientsSansGeo = (await DB.listClients()).filter((c) => c.adresse && c.lat == null).length;
   const recapEmail = await DB.getParam("recapEmail", "");
   const currentTheme = await DB.getParam("theme", "light");
@@ -1268,7 +1308,7 @@ async function renderReglages() {
   const devisTelVal = await DB.getParam("devisTelephone", "");
 
   root.innerHTML = `
-    <h2 class="view-heading">Réglages</h2>
+    <h2 class="view-heading">Général</h2>
 
     <div class="info-block">
       <h3>Apparence</h3>
@@ -1335,12 +1375,6 @@ async function renderReglages() {
       <h3>Google Agenda (lecture seule)</h3>
       <div id="calendar-status"></div>
     </div>
-
-    <div class="info-block">
-      <h3>Marques installées</h3>
-      <p style="font-size:12.5px;color:var(--smoke);margin:0 0 12px;">Part de chaque marque parmi les fiches clients. Les orthographes proches (ex : "Extraflamme"/"Extraflame") sont regroupées automatiquement.</p>
-      <div id="brand-stats"></div>
-    </div>
   `;
 
   document.getElementById("save-domicile").onclick = async () => {
@@ -1385,12 +1419,11 @@ async function renderReglages() {
       toast(`Géocodage en cours… (${done}/${clients.length})`);
     }
     toast("Géocodage terminé ✓");
-    if (state.view === "reglages") render();
+    if (state.view === "reglages-general") render();
   };
 
   await renderDriveStatus();
   await renderCalendarStatus();
-  await renderBrandStats();
 
   const localImportInput = document.getElementById("local-import-file");
   document.getElementById("local-import-btn").onclick = () => localImportInput.click();
@@ -1415,6 +1448,67 @@ async function renderReglages() {
       toast("Échec : " + e.message);
     }
   };
+}
+
+// ---------- Réglages : Articles et consommables ----------
+async function renderReglagesArticles() {
+  const articles = await DB.getParam("articlesConsommables", []);
+  root.innerHTML = `
+    <h2 class="view-heading">Articles et consommables</h2>
+    <p style="font-size:12.5px;color:var(--smoke);margin:-8px 0 14px;">Tous les prix sont HORS TAXES. Cette liste sert à choisir rapidement des consommables au moment de "RDV honoré".</p>
+    <div id="articles-list"></div>
+    <button class="btn-primary" id="add-article-btn" style="width:100%;margin-top:6px;">+ Ajouter un article</button>
+  `;
+
+  function renderList() {
+    const el = document.getElementById("articles-list");
+    if (articles.length === 0) {
+      el.innerHTML = `<div class="empty-state"><span class="emoji">📦</span>Aucun article pour l'instant.</div>`;
+      return;
+    }
+    el.innerHTML = articles.map((a, i) => `
+      <div class="info-block" data-idx="${i}" style="margin-bottom:8px;">
+        <div class="form-row-2">
+          <div class="form-row" style="margin-bottom:8px;"><label>Nom</label><input type="text" class="art-nom" value="${escapeAttr(a.nom)}" /></div>
+          <div class="form-row" style="margin-bottom:8px;"><label>Prix (€ HT)</label><input type="text" inputmode="decimal" class="art-prix" value="${escapeAttr(String(a.prixHT))}" /></div>
+        </div>
+        <button type="button" class="link-btn art-remove" style="color:var(--danger);">Supprimer</button>
+      </div>
+    `).join("");
+    el.querySelectorAll("[data-idx]").forEach((row) => {
+      const idx = parseInt(row.dataset.idx, 10);
+      row.querySelector(".art-nom").onchange = async (e) => {
+        articles[idx].nom = e.target.value.trim();
+        await DB.setParam("articlesConsommables", articles);
+      };
+      row.querySelector(".art-prix").onchange = async (e) => {
+        articles[idx].prixHT = e.target.value.trim();
+        await DB.setParam("articlesConsommables", articles);
+      };
+      row.querySelector(".art-remove").onclick = async () => {
+        articles.splice(idx, 1);
+        await DB.setParam("articlesConsommables", articles);
+        renderList();
+      };
+    });
+  }
+  renderList();
+
+  document.getElementById("add-article-btn").onclick = async () => {
+    articles.push({ id: uid(), nom: "", prixHT: "0" });
+    await DB.setParam("articlesConsommables", articles);
+    renderList();
+  };
+}
+
+// ---------- Réglages : Marques installées ----------
+async function renderReglagesMarques() {
+  root.innerHTML = `
+    <h2 class="view-heading">Marques installées</h2>
+    <p style="font-size:12.5px;color:var(--smoke);margin:-8px 0 14px;">Part de chaque marque parmi les fiches clients. Les orthographes proches (ex : "Extraflamme"/"Extraflame") sont regroupées automatiquement. Touche une marque pour voir les clients concernés.</p>
+    <div id="brand-stats"></div>
+  `;
+  await renderBrandStats();
 }
 
 async function buildBackupPayload() {
@@ -1495,7 +1589,7 @@ async function maybeAutoCloudBackup() {
   const last = await DB.getParam("lastCloudBackupAt", null);
   if (last && Date.now() - new Date(last).getTime() < CLOUD_BACKUP_INTERVAL_MS) return;
   await runCloudBackup();
-  if (state.view === "reglages") renderDriveStatus();
+  if (state.view === "reglages-general") renderDriveStatus();
 }
 
 // ---------- Google Agenda (lecture seule) ----------
@@ -1532,7 +1626,7 @@ async function maybeAutoCalendarSync() {
   const last = await DB.getParam("lastCalendarSyncAt", null);
   if (last && Date.now() - new Date(last).getTime() < CALENDAR_SYNC_INTERVAL_MS) return;
   await runCalendarSync();
-  if (state.view === "reglages") renderCalendarStatus();
+  if (state.view === "reglages-general") renderCalendarStatus();
 }
 
 async function getCalendarEventsForDate(dateISO) {
@@ -2258,6 +2352,7 @@ async function openClientForm(existing, onSaved) {
       <div class="form-row"><label>Modèle</label><input type="text" id="f-modele" value="${escapeAttr(c.modele)}" /></div>
     </div>
     <div class="form-row"><label>Infos complémentaires</label><input type="text" id="f-infos" value="${escapeAttr(c.infosComplementaires)}" /></div>
+    <div class="form-row"><label>Prix de l'entretien — HORS TAXES (facultatif)</label><input type="text" inputmode="decimal" id="f-prix-entretien" value="${escapeAttr(c.prixEntretienHT != null ? String(c.prixEntretienHT) : "")}" placeholder="Ex : 65" /></div>
     <div class="form-row"><label>Commentaires</label><textarea id="f-comment">${escapeHtml(c.commentaires || "")}</textarea></div>
     <div class="sheet-actions">
       <button class="btn-secondary" id="cancel-btn">Annuler</button>
@@ -2290,6 +2385,7 @@ async function openClientForm(existing, onSaved) {
       marque: document.getElementById("f-marque").value.trim(),
       modele: document.getElementById("f-modele").value.trim(),
       infosComplementaires: document.getElementById("f-infos").value.trim(),
+      prixEntretienHT: document.getElementById("f-prix-entretien").value.trim() || null,
       commentaires: document.getElementById("f-comment").value.trim(),
     };
     const addressChanged = !existing || existing.adresse !== client.adresse;
@@ -2992,7 +3088,7 @@ async function openRdvDetail(id) {
     </div>
 
     ${(() => { const recapHref = client ? buildRdvConfirmSmsHref(r, client) : null; return recapHref ? `<a class="btn-secondary" href="${recapHref}" style="display:block;text-align:center;text-decoration:none;padding:13px;border-radius:12px;margin-bottom:10px;">🔁 Renvoyer SMS récapitulatif</a>` : ""; })()}
-    ${r.statut === "honore" ? "" : '<button class="btn-primary" id="honore-btn" style="width:100%;margin-bottom:10px;">✓ RDV honoré</button>'}
+    <button class="btn-primary" id="honore-btn" style="width:100%;margin-bottom:10px;">${r.statut === "honore" ? "✏️ Modifier le paiement / compte-rendu" : "✓ RDV honoré"}</button>
     <div class="sheet-actions">
       <button class="btn-secondary" id="edit-btn">Modifier</button>
       <button class="btn-danger" id="del-btn">Supprimer</button>
@@ -3020,40 +3116,165 @@ async function openHonoreForm(r, client) {
   let virement = (r.paiement && r.paiement.mode === "virement")
     ? { montant: r.paiement.montant || "", commentaire: r.paiement.commentaire || "" }
     : { montant: "", commentaire: "" };
-  let honorePhotos = [];
+  let honorePhotos = r.montant && r.photosHonore ? r.photosHonore : [];
+  // (les photos d'intervention déjà enregistrées vivent sur l'intervention, pas sur le rdv —
+  // en cas de ré-ouverture on repart d'une liste vide, l'ancienne reste dans l'historique)
+  honorePhotos = [];
+
+  const articlesList = await DB.getParam("articlesConsommables", []);
+  let montant = {
+    entretienHT: (r.montant && r.montant.entretienHT != null) ? String(r.montant.entretienHT) : (client && client.prixEntretienHT != null ? String(client.prixEntretienHT) : ""),
+    mainOeuvreHT: (r.montant && r.montant.mainOeuvreHT != null) ? String(r.montant.mainOeuvreHT) : "0",
+    articles: (r.montant && r.montant.articles) ? r.montant.articles.map((a) => ({ ...a })) : [],
+  };
 
   openSheet(`
     <h2>RDV honoré</h2>
     <p style="color:var(--smoke);font-size:13px;margin:-8px 0 14px;">${client ? clientBadge(client) + escapeHtml(clientFullName(client)) : ""} — ${fmtDateFR(r.date)}</p>
     <p style="font-size:13.5px;color:var(--ink-dim);margin:0 0 14px;">Ce rendez-vous sera ajouté à l'historique du client.</p>
-    <div class="form-row">
-      <label>Compte-rendu d'intervention (facultatif)</label>
-      <textarea id="f-compte-rendu" placeholder="Ex : prévoir changement moteur, joint de porte à revoir...">${escapeHtml(r.compteRendu || "")}</textarea>
-    </div>
-    <div class="form-row">
-      <label>Photos (facultatif)</label>
-      <div id="honore-photos-grid"></div>
-      <input type="file" accept="image/*" capture="environment" id="honore-photo-camera-input" hidden />
-      <input type="file" accept="image/*" multiple id="honore-photo-input" hidden />
-      <div class="sheet-actions" style="margin-top:8px;">
-        <button type="button" class="btn-secondary" id="honore-photo-camera-btn">📷 Prendre une photo</button>
-        <button type="button" class="btn-secondary" id="honore-photo-add-btn">🖼️ Choisir dans la galerie</button>
+
+    <div class="info-block">
+      <h3>Montant</h3>
+      <div class="form-row-2">
+        <div class="form-row" style="margin-bottom:8px;"><label>Entretien (€ HT)</label><input type="text" inputmode="decimal" id="f-entretien-ht" value="${escapeAttr(montant.entretienHT)}" /></div>
+        <div class="form-row" style="margin-bottom:8px;"><label>Main d'œuvre (€ HT)</label><input type="text" inputmode="decimal" id="f-mainoeuvre-ht" value="${escapeAttr(montant.mainOeuvreHT)}" /></div>
       </div>
+      <label style="display:block;font-size:11px;text-transform:uppercase;letter-spacing:0.04em;color:var(--smoke);margin:14px 0 6px;">Articles / consommables</label>
+      <div id="montant-articles-checklist"></div>
+      <div id="montant-articles-custom"></div>
+      <button type="button" class="btn-secondary" id="add-custom-article-btn" style="width:100%;margin-top:8px;">+ Ajouter un article ponctuel (cette intervention uniquement)</button>
+      <div id="montant-total-display" style="margin-top:14px;padding:10px 12px;border-radius:10px;background:var(--surface-2);"></div>
     </div>
-    <div class="form-row">
-      <label>Mode de paiement</label>
+
+    <div class="info-block">
+      <h3>Paiement</h3>
       <div class="pill-choice" id="f-paiement-mode">
         <button type="button" data-val="cheque" class="${mode === "cheque" ? "active period-active" : ""}">Chèque</button>
         <button type="button" data-val="virement" class="${mode === "virement" ? "active period-active" : ""}">Virement bancaire</button>
       </div>
+      <div id="paiement-details"></div>
     </div>
-    <div id="paiement-details"></div>
+
+    <div class="info-block">
+      <h3>Compte-rendu d'intervention</h3>
+      <div class="form-row">
+        <label>Compte-rendu (facultatif)</label>
+        <textarea id="f-compte-rendu" placeholder="Ex : prévoir changement moteur, joint de porte à revoir...">${escapeHtml(r.compteRendu || "")}</textarea>
+      </div>
+      <div class="form-row">
+        <label>Photos (facultatif)</label>
+        <div id="honore-photos-grid"></div>
+        <input type="file" accept="image/*" capture="environment" id="honore-photo-camera-input" hidden />
+        <input type="file" accept="image/*" multiple id="honore-photo-input" hidden />
+        <div class="sheet-actions" style="margin-top:8px;">
+          <button type="button" class="btn-secondary" id="honore-photo-camera-btn">📷 Prendre une photo</button>
+          <button type="button" class="btn-secondary" id="honore-photo-add-btn">🖼️ Choisir dans la galerie</button>
+        </div>
+      </div>
+    </div>
+
     <div class="sheet-actions">
       <button class="btn-secondary" id="cancel-btn">Annuler</button>
       <button class="btn-primary" id="confirm-btn">Valider</button>
     </div>
   `);
 
+  // ---------- Montant : articles + calcul du total ----------
+  function refreshMontantTotal() {
+    const m = {
+      entretienHT: document.getElementById("f-entretien-ht").value,
+      mainOeuvreHT: document.getElementById("f-mainoeuvre-ht").value,
+      articles: montant.articles,
+    };
+    const t = computeMontantTotals(m);
+    document.getElementById("montant-total-display").innerHTML = `
+      <div class="info-row"><span class="k">Total HT</span><span class="v">${fmtMontant(t.totalHT)}€</span></div>
+      <div class="info-row" style="border-top:1px solid var(--line);"><span class="k" style="font-weight:700;">Total TTC (TVA 10%)</span><span class="v" style="font-weight:700;color:var(--ember);">${fmtMontant(t.totalTTC)}€</span></div>
+    `;
+  }
+
+  function renderMontantChecklist() {
+    const el = document.getElementById("montant-articles-checklist");
+    if (articlesList.length === 0) {
+      el.innerHTML = `<p class="near-hint">Aucun article défini dans Réglages → Articles et consommables.</p>`;
+      return;
+    }
+    el.innerHTML = articlesList.map((art) => {
+      const existing = montant.articles.find((a) => a.articleId === art.id);
+      const checked = !!existing;
+      const qte = existing ? existing.quantite : 1;
+      const prix = existing ? existing.prixHT : art.prixHT;
+      return `
+        <div class="montant-article-row" data-article-id="${art.id}">
+          <label class="chk" style="flex:1;min-width:0;">
+            <input type="checkbox" class="ma-check" ${checked ? "checked" : ""} />
+            <span style="word-break:break-word;">${escapeHtml(art.nom)}</span>
+          </label>
+          <input type="text" inputmode="numeric" class="ma-qty" value="${qte}" ${checked ? "" : "disabled"} />
+          <input type="text" inputmode="decimal" class="ma-prix" value="${escapeAttr(String(prix))}" ${checked ? "" : "disabled"} />
+        </div>
+      `;
+    }).join("");
+    el.querySelectorAll(".montant-article-row").forEach((row) => {
+      const artId = row.dataset.articleId;
+      const art = articlesList.find((a) => a.id === artId);
+      const checkEl = row.querySelector(".ma-check");
+      const qtyEl = row.querySelector(".ma-qty");
+      const prixEl = row.querySelector(".ma-prix");
+      function syncFromRow() {
+        montant.articles = montant.articles.filter((a) => a.articleId !== artId);
+        if (checkEl.checked) {
+          montant.articles.push({ articleId: artId, nom: art.nom, quantite: qtyEl.value, prixHT: prixEl.value });
+        }
+        refreshMontantTotal();
+      }
+      checkEl.onchange = () => { qtyEl.disabled = !checkEl.checked; prixEl.disabled = !checkEl.checked; syncFromRow(); };
+      qtyEl.oninput = syncFromRow;
+      prixEl.oninput = syncFromRow;
+    });
+  }
+
+  function renderCustomArticles() {
+    const el = document.getElementById("montant-articles-custom");
+    const isCustomOrOrphan = (a) => !a.articleId || !articlesList.some((art) => art.id === a.articleId);
+    const customs = montant.articles.filter(isCustomOrOrphan);
+    el.innerHTML = customs.map((a, i) => `
+      <div class="montant-article-row" data-custom-idx="${i}">
+        <input type="text" class="ma-custom-nom" value="${escapeAttr(a.nom)}" placeholder="Nom de l'article" style="flex:1;min-width:0;" />
+        <input type="text" inputmode="numeric" class="ma-qty" value="${escapeAttr(String(a.quantite))}" />
+        <input type="text" inputmode="decimal" class="ma-prix" value="${escapeAttr(String(a.prixHT))}" />
+        <button type="button" class="ma-remove" aria-label="Retirer">✕</button>
+      </div>
+    `).join("");
+    el.querySelectorAll("[data-custom-idx]").forEach((row) => {
+      const idx = parseInt(row.dataset.customIdx, 10);
+      const customEntries = montant.articles.filter(isCustomOrOrphan);
+      const target = customEntries[idx];
+      const globalIdx = montant.articles.indexOf(target);
+      row.querySelector(".ma-custom-nom").oninput = (e) => { montant.articles[globalIdx].nom = e.target.value; };
+      row.querySelector(".ma-qty").oninput = (e) => { montant.articles[globalIdx].quantite = e.target.value; refreshMontantTotal(); };
+      row.querySelector(".ma-prix").oninput = (e) => { montant.articles[globalIdx].prixHT = e.target.value; refreshMontantTotal(); };
+      row.querySelector(".ma-remove").onclick = () => {
+        montant.articles.splice(globalIdx, 1);
+        renderCustomArticles();
+        refreshMontantTotal();
+      };
+    });
+  }
+
+  document.getElementById("add-custom-article-btn").onclick = () => {
+    montant.articles.push({ articleId: null, nom: "", quantite: "1", prixHT: "0" });
+    renderCustomArticles();
+    refreshMontantTotal();
+  };
+  document.getElementById("f-entretien-ht").oninput = refreshMontantTotal;
+  document.getElementById("f-mainoeuvre-ht").oninput = refreshMontantTotal;
+
+  renderMontantChecklist();
+  renderCustomArticles();
+  refreshMontantTotal();
+
+  // ---------- Paiement (inchangé) ----------
   const detailsEl = document.getElementById("paiement-details");
 
   function readChequesFromDOM() {
@@ -3142,6 +3363,9 @@ async function openHonoreForm(r, client) {
 
   document.getElementById("cancel-btn").onclick = closeSheet;
   document.getElementById("confirm-btn").onclick = async () => {
+    montant.entretienHT = document.getElementById("f-entretien-ht").value.trim();
+    montant.mainOeuvreHT = document.getElementById("f-mainoeuvre-ht").value.trim();
+
     let paiement;
     if (mode === "cheque") {
       readChequesFromDOM();
@@ -3151,21 +3375,23 @@ async function openHonoreForm(r, client) {
       paiement = { mode: "virement", montant: virement.montant.trim(), commentaire: virement.commentaire.trim() };
     }
 
+    const compteRenduTexte = document.getElementById("f-compte-rendu").value.trim();
     await DB.saveIntervention({
       clientId: r.clientId,
       date: r.date,
       type: r.type,
-      compteRendu: document.getElementById("f-compte-rendu").value.trim(),
-      description: formatPaiementLines(paiement).join(" / "),
+      compteRendu: compteRenduTexte,
+      description: [...formatMontantLines(montant), ...formatPaiementLines(paiement)].join(" / "),
       photos: honorePhotos,
     });
     r.statut = "honore";
+    r.montant = montant;
     r.paiement = paiement;
-    r.compteRendu = document.getElementById("f-compte-rendu").value.trim();
+    r.compteRendu = compteRenduTexte;
     // On fige ici le statut "nouveau client" tel qu'il était au moment de CE rendez-vous —
     // le récapitulatif s'appuiera toujours sur cette valeur figée, jamais sur l'état
     // actuel de la fiche (qui, lui, bascule juste après pour les prochaines fois).
-    r.etaitNouveauClient = !!(client && client.nouveauClient === "oui");
+    if (r.etaitNouveauClient == null) r.etaitNouveauClient = !!(client && client.nouveauClient === "oui");
     await DB.saveRendezvous(r);
 
     // Bascule automatique en client existant, pour les rendez-vous SUIVANTS uniquement.
@@ -3181,6 +3407,38 @@ async function openHonoreForm(r, client) {
     toast("Rendez-vous honoré, ajouté à l'historique");
     navigate("agenda");
   };
+}
+
+const TVA_TAUX = 0.10;
+
+function computeMontantTotals(montant) {
+  const entretienHT = parseFloat(montant.entretienHT) || 0;
+  const mainOeuvreHT = parseFloat(montant.mainOeuvreHT) || 0;
+  const articlesHT = (montant.articles || []).reduce((sum, a) => sum + (parseFloat(a.prixHT) || 0) * (parseFloat(a.quantite) || 0), 0);
+  const totalHT = entretienHT + mainOeuvreHT + articlesHT;
+  const totalTTC = totalHT * (1 + TVA_TAUX);
+  return { entretienHT, mainOeuvreHT, articlesHT, totalHT, totalTTC };
+}
+
+function fmtMontant(n) {
+  return n.toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function formatMontantLines(montant) {
+  const { entretienHT, mainOeuvreHT, totalHT, totalTTC } = computeMontantTotals(montant);
+  const lines = [];
+  if (entretienHT > 0) lines.push(`Entretien (HT) : ${fmtMontant(entretienHT)}€`);
+  if (mainOeuvreHT > 0) lines.push(`Main d'œuvre (HT) : ${fmtMontant(mainOeuvreHT)}€`);
+  (montant.articles || []).forEach((a) => {
+    const qte = parseFloat(a.quantite) || 0;
+    const prix = parseFloat(a.prixHT) || 0;
+    if (qte <= 0) return;
+    lines.push(`${a.nom}${qte > 1 ? ` ×${qte}` : ""} (HT) : ${fmtMontant(prix * qte)}€`);
+  });
+  if (lines.length === 0) return [];
+  lines.push(`Total HT : ${fmtMontant(totalHT)}€`);
+  lines.push(`Total TTC (TVA 10%) : ${fmtMontant(totalTTC)}€`);
+  return lines;
 }
 
 function formatPaiementLines(paiement) {

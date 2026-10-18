@@ -2,7 +2,7 @@
    Vues : Accueil / Agenda / Clients / Fiche client / Réglages
    Toute la donnée passe par DB (db.js → IndexedDB). */
 
-const APP_VERSION = "1.52.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
+const APP_VERSION = "1.53.1"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
 
 const JOURS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
 const JOURS_COURT = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
@@ -257,6 +257,7 @@ async function buildRecapData(startISO, endISO) {
     const entry = {
       nomLigne: recapNameLine(c),
       adresse: (c && c.adresse) || r.adresse || "",
+      telephone: [(c && c.telephone) || "", (c && c.telephone2) || ""].filter(Boolean).join(" / "),
       email: (c && c.email) || "",
       marque: (c && c.marque) || "",
       modele: (c && c.modele) || "",
@@ -287,6 +288,7 @@ function formatRecapEntry(e) {
   const lines = [
     `${e.nomLigne} :`,
     e.adresse || "(adresse non renseignée)",
+    `Téléphone : ${e.telephone || "—"}`,
     `E-mail : ${e.email || "—"}`,
     `Raison : ${e.raison}`,
     `Marque : ${e.marque || "—"}`,
@@ -2992,6 +2994,17 @@ function buildRdvConfirmSmsHref(item, client) {
   return client && client.telephone ? `sms:${client.telephone.replace(/\s+/g, "")}?body=${smsBody}` : null;
 }
 
+// SMS de rappel de rendez-vous : "Bonjour, ETS Gallay, rappel de notre rendez-vous du
+// mardi 15 septembre 2026 matin. Bonne journée"
+function buildRdvReminderSmsHref(item, client) {
+  if (!client || !client.telephone) return null;
+  const moment = item.periode === "matin" ? " matin" : item.periode === "apres-midi" ? " après-midi" : "";
+  const body = encodeURIComponent(
+    `Bonjour, ETS Gallay, rappel de notre rendez-vous du ${fmtDateFullFR(item.date)}${moment}. Bonne journée`
+  );
+  return `sms:${client.telephone.replace(/\s+/g, "")}?body=${body}`;
+}
+
 async function openRdvConfirmSheet(item, client) {
   const smsHref = buildRdvConfirmSmsHref(item, client);
 
@@ -3088,6 +3101,7 @@ async function openRdvDetail(id) {
     </div>
 
     ${(() => { const recapHref = client ? buildRdvConfirmSmsHref(r, client) : null; return recapHref ? `<a class="btn-secondary" href="${recapHref}" style="display:block;text-align:center;text-decoration:none;padding:13px;border-radius:12px;margin-bottom:10px;">🔁 Renvoyer SMS récapitulatif</a>` : ""; })()}
+    ${(() => { const rappelHref = (client && r.statut !== "honore") ? buildRdvReminderSmsHref(r, client) : null; return rappelHref ? `<a class="btn-secondary" href="${rappelHref}" style="display:block;text-align:center;text-decoration:none;padding:13px;border-radius:12px;margin-bottom:10px;">🔔 SMS de rappel de RDV</a>` : ""; })()}
     <button class="btn-primary" id="honore-btn" style="width:100%;margin-bottom:10px;">${r.statut === "honore" ? "✏️ Modifier le paiement / compte-rendu" : "✓ RDV honoré"}</button>
     <div class="sheet-actions">
       <button class="btn-secondary" id="edit-btn">Modifier</button>

@@ -4,6 +4,7 @@
 
 const NOMINATIM_URL = "https://nominatim.openstreetmap.org/search";
 const OSRM_TRIP_URL = "https://router.project-osrm.org/trip/v1/driving/";
+const OSRM_ROUTE_URL = "https://router.project-osrm.org/route/v1/driving/";
 
 // File d'attente simple : Nominatim demande max ~1 requête/seconde.
 let geocodeQueueTail = Promise.resolve();
@@ -97,9 +98,60 @@ async function optimizeTrip(points, startPoint, roundtrip) {
   return { order: ordered.map((p) => p.id), distanceKm: dist, durationMin: null, estimated: true };
 }
 
-// Variante avec premier et/ou dernier client imposés. OSRM ne permet de fixer que le tout
-// premier et le tout dernier point d'un trajet — on optimise donc librement le reste "au milieu",
-// puis on recolle les segments imposés autour, en estimant leur distance à vol d'oiseau.
+// Distance et durée routières entre deux points (service "route" d'OSRM).
+async function osrmRoadLeg(a, b) {
+  if (!navigator.onLine) return null;
+  try {
+    const url = `${OSRM_ROUTE_URL}${a.lon},${a.lat};${b.lon},${b.lat}?overview=false`;
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 8000);
+    const res = await fetch(url, { signal: ctrl.signal });
+    clearTimeout(t);
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (data.code !== "Ok" || !data.routes || !data.routes[0]) return null;
+    return { km: data.routes[0].distance / 1000, min: data.routes[0].duration / 60 };
+  } catch (e) {
+    return null;
+  }
+}
+
+// Optimisation avec un point de départ fixe (first) et/ou d'arrivée fixe (last), le tout
+// calculé sur le réseau routier réel : OSRM sait fixer le premier et le dernier point
+// (source=first / destination=last), il optimise l'ordre de tout ce qui est entre les deux.
+// Retourne null si le service est indisponible (l'appelant retombe alors sur l'estimation).
+async function osrmConstrainedTrip(anchor, middle, end) {
+  if (!navigator.onLine) return null;
+  const coords = [...(anchor ? [anchor] : []), ...middle, ...(end ? [end] : [])];
+  if (coords.length < 2) return null;
+  try {
+    const coordStr = coords.map((p) => `${p.lon},${p.lat}`).join(";");
+    const source = anchor ? "first" : "any";
+    const destination = end ? "last" : "any";
+    const url = `${OSRM_TRIP_URL}${coordStr}?source=${source}&destination=${destination}&roundtrip=false&overview=false`;
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 8000);
+    const res = await fetch(url, { signal: ctrl.signal });
+    clearTimeout(t);
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (data.code !== "Ok" || !data.trips || !data.trips[0]) return null;
+    const offset = anchor ? 1 : 0;
+    const mid = data.waypoints.slice(offset, offset + middle.length).map((w, i) => ({ id: middle[i].id, idx: w.waypoint_index }));
+    mid.sort((a, b) => a.idx - b.idx);
+    return {
+      middleOrder: mid.map((m) => m.id),
+      distanceKm: data.trips[0].distance / 1000,
+      durationMin: data.trips[0].duration / 60,
+    };
+  } catch (e) {
+    return null;
+  }
+}
+
+// Variante avec premier et/ou dernier client imposés.
+// Si un premier client est imposé, le trajet démarre directement chez lui (pas de détour
+// par le point de départ). Le retour au point de départ, lui, reste compté.
 async function optimizeTripConstrained(points, startPoint, roundtrip, forceFirstId, forceLastId) {
   const remaining = points.slice();
   let forcedFirst = null, forcedLast = null;
@@ -118,35 +170,48 @@ async function optimizeTripConstrained(points, startPoint, roundtrip, forceFirst
   }
 
   const anchor = forcedFirst || startPoint;
-  let middleResult;
-  if (remaining.length === 0) {
-    middleResult = { order: [], distanceKm: 0, durationMin: 0, estimated: false };
-  } else if (remaining.length === 1) {
-    const d = anchor ? haversineKm(anchor.lat, anchor.lon, remaining[0].lat, remaining[0].lon) : 0;
-    middleResult = { order: [remaining[0].id], distanceKm: d, durationMin: null, estimated: true };
+  const byId = Object.fromEntries(points.map((p) => [p.id, p]));
+  let middleOrder, distanceKm, durationMin = null, estimated = false;
+
+  const trip = await osrmConstrainedTrip(anchor, remaining, forcedLast);
+  if (trip) {
+    middleOrder = trip.middleOrder;
+    distanceKm = trip.distanceKm;
+    durationMin = trip.durationMin;
+  } else if (!anchor && !forcedLast) {
+    middleOrder = remaining.map((p) => p.id);
+    distanceKm = 0;
   } else {
-    middleResult = await optimizeTrip(remaining, anchor, false);
+    // Repli hors ligne : plus proche voisin + distances à vol d'oiseau.
+    estimated = true;
+    const ordered = remaining.length ? nearestNeighborOrder(remaining, anchor) : [];
+    middleOrder = ordered.map((p) => p.id);
+    distanceKm = 0;
+    let prev = anchor;
+    for (const p of ordered) { if (prev) distanceKm += haversineKm(prev.lat, prev.lon, p.lat, p.lon); prev = p; }
+    if (forcedLast && prev) distanceKm += haversineKm(prev.lat, prev.lon, forcedLast.lat, forcedLast.lon);
   }
 
   const order = [];
   if (forcedFirst) order.push(forcedFirst.id);
-  order.push(...middleResult.order);
+  order.push(...middleOrder);
   if (forcedLast) order.push(forcedLast.id);
 
-  const byId = Object.fromEntries(points.map((p) => [p.id, p]));
-  let dist = middleResult.distanceKm;
-  // Si un premier client est imposé, le trajet démarre directement chez lui : on ne
-  // compte pas le trajet point de départ -> premier client.
-  if (forcedLast) {
-    const prevId = middleResult.order.length ? middleResult.order[middleResult.order.length - 1] : null;
-    const prevPoint = prevId ? byId[prevId] : (forcedFirst || startPoint);
-    if (prevPoint) dist += haversineKm(prevPoint.lat, prevPoint.lon, forcedLast.lat, forcedLast.lon);
-  }
+  // Retour au point de départ, lui aussi sur route réelle.
   if (roundtrip && startPoint) {
-    const lastId = forcedLast ? forcedLast.id : (middleResult.order.length ? middleResult.order[middleResult.order.length - 1] : (forcedFirst ? forcedFirst.id : null));
-    const lastPoint = lastId ? byId[lastId] : null;
-    if (lastPoint) dist += haversineKm(lastPoint.lat, lastPoint.lon, startPoint.lat, startPoint.lon);
+    const lastPoint = byId[order[order.length - 1]];
+    if (lastPoint) {
+      const leg = await osrmRoadLeg(lastPoint, startPoint);
+      if (leg) {
+        distanceKm += leg.km;
+        durationMin = durationMin != null ? durationMin + leg.min : null;
+      } else {
+        distanceKm += haversineKm(lastPoint.lat, lastPoint.lon, startPoint.lat, startPoint.lon);
+        durationMin = null;
+        estimated = true;
+      }
+    }
   }
 
-  return { order, distanceKm: dist, durationMin: middleResult.durationMin, estimated: true };
+  return { order, distanceKm, durationMin, estimated };
 }

@@ -2,7 +2,7 @@
    Vues : Accueil / Agenda / Clients / Fiche client / Réglages
    Toute la donnée passe par DB (db.js → IndexedDB). */
 
-const APP_VERSION = "1.56.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
+const APP_VERSION = "1.56.1"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
 
 const JOURS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
 const JOURS_COURT = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
@@ -1725,6 +1725,8 @@ async function renderReglagesGeneral() {
     <div class="info-block">
       <h3>À propos</h3>
       <div class="info-row"><span class="k">Version de l'application</span><span class="v">${APP_VERSION}</span></div>
+      <button class="btn-secondary" id="force-update-btn" style="width:100%;margin-top:10px;">Forcer la mise à jour</button>
+      <p class="near-hint" style="margin:6px 0 0;">Recharge la dernière version depuis Internet. Les clients et rendez-vous ne sont pas touchés.</p>
     </div>
 
     <div class="info-block">
@@ -1852,6 +1854,8 @@ async function renderReglagesGeneral() {
       toast("Échec : " + e.message);
     }
   };
+  const fu = document.getElementById("force-update-btn");
+  if (fu) fu.onclick = forceAppUpdate;
 }
 
 // ---------- Réglages : Articles et consommables ----------
@@ -4136,9 +4140,34 @@ function escapeHtml(str) {
 function escapeAttr(str) { return escapeHtml(str); }
 
 // ---------- Service worker (offline) ----------
+const APP_FILES = ["./", "index.html", "style.css", "db.js", "geo.js", "drive.js", "calendar.js", "app.js", "manifest.json"];
+
+// Mise à jour forcée : supprime le service worker et ses caches (pas les données), recharge
+// chaque fichier depuis Internet en contournant le cache du navigateur, puis relance l'appli.
+async function forceAppUpdate() {
+  if (!navigator.onLine) { toast("Connexion Internet nécessaire"); return; }
+  toast("Mise à jour en cours…");
+  try {
+    if ("serviceWorker" in navigator) {
+      for (const reg of await navigator.serviceWorker.getRegistrations()) await reg.unregister();
+    }
+    if (window.caches) for (const k of await caches.keys()) await caches.delete(k);
+    await Promise.all(APP_FILES.map((f) => fetch(f, { cache: "reload" }).catch(() => {})));
+  } catch (e) { /* on recharge quand même */ }
+  location.replace(location.pathname + "?maj=" + Date.now());
+}
+
 if ("serviceWorker" in navigator) {
+  const hadController = !!navigator.serviceWorker.controller;
+  let reloaded = false;
+  // Quand une nouvelle version prend la main, on recharge une fois pour l'afficher tout de suite.
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (!hadController || reloaded) return;
+    reloaded = true;
+    location.reload();
+  });
   window.addEventListener("load", () => {
-    navigator.serviceWorker.register("sw.js").then((reg) => { reg.update(); }).catch(() => {});
+    navigator.serviceWorker.register("sw.js", { updateViaCache: "none" }).then((reg) => { reg.update(); }).catch(() => {});
   });
 }
 

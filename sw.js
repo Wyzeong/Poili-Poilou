@@ -1,4 +1,4 @@
-const CACHE_NAME = "tournees-poeles-v1.56.0";
+const CACHE_NAME = "tournees-poeles-v1.56.1";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -16,7 +16,10 @@ const APP_SHELL = [
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL))
+    caches.open(CACHE_NAME).then((cache) =>
+      // cache: "reload" : on récupère les fichiers sur le réseau, jamais depuis le cache HTTP du navigateur
+      Promise.all(APP_SHELL.map((u) => fetch(new Request(u, { cache: "reload" })).then((res) => { if (!res.ok) throw new Error(u); return cache.put(u, res); })))
+    )
   );
   self.skipWaiting();
 });

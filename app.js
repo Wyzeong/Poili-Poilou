@@ -2,7 +2,7 @@
    Vues : Accueil / Agenda / Clients / Fiche client / Réglages
    Toute la donnée passe par DB (db.js → IndexedDB). */
 
-const APP_VERSION = "1.55.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
+const APP_VERSION = "1.56.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
 
 const JOURS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
 const JOURS_COURT = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
@@ -368,6 +368,132 @@ async function savePiecesForRdv(rdv, edited, withDelay) {
   await saveCommandes([...others, ...mine]);
 }
 
+// ---------- Livraison de pièces pendant une tournée ----------
+async function listLivraisonsForDate(iso) {
+  return (await loadCommandes()).filter((c) => c.statut === "receptionne" && c.livraisonDate === iso);
+}
+function renderLivraisonChip(l, clientMap) {
+  const c = clientMap[l.clientId];
+  const addr = c ? c.adresse : "";
+  return `<button class="rdv-chip liv-chip" data-liv-chip="${l.id}">
+    <div class="chip-top-row"><span class="type-badge type-badge-livraison">📦 À livrer</span></div>
+    <span class="chip-name">${clientBadge(c)}${escapeHtml(c ? clientFullName(c) : "Client")}</span>
+    <span class="chip-addr">${escapeHtml(l.nom)}</span>
+    ${addr ? `<span class="chip-addr">📍 ${escapeHtml(addr)}</span>` : ""}
+  </button>`;
+}
+async function openLivraisonDetail(id) {
+  const all = await loadCommandes();
+  const l = all.find((x) => x.id === id);
+  if (!l) return;
+  const c = await DB.getClient(l.clientId);
+  const mm = c ? [c.marque, c.modele].filter(Boolean).join(" ") : "";
+  openSheet(`
+    <h2>📦 Livraison de pièce</h2>
+    <div class="info-block">
+      <div style="font-weight:700;font-size:16px;">${escapeHtml(l.nom)}</div>
+      <div style="font-weight:600;margin-top:3px;">${escapeHtml(clientFullName(c) || "Client")}</div>
+      <div class="near-hint">Poêle : ${mm ? escapeHtml(mm) : "non renseigné"}</div>
+      ${c && c.adresse ? `<div class="near-hint">${escapeHtml(c.adresse)}</div>` : ""}
+      <div class="near-hint" style="margin-top:4px;">Prévue le ${fmtDateFR(l.livraisonDate)} ${l.livraisonPeriode === "matin" ? "matin" : "après-midi"}</div>
+    </div>
+    <button class="btn-primary" id="lv-done" style="width:100%;margin-bottom:8px;">Marquer « Livré » ✓</button>
+    ${c && c.telephone ? `<a class="btn-secondary" href="tel:${c.telephone.replace(/\s+/g, "")}" style="display:block;text-align:center;text-decoration:none;margin-bottom:8px;">📞 Appeler</a>` : ""}
+    <button class="btn-secondary" id="lv-move" style="width:100%;margin-bottom:8px;">Changer le jour</button>
+    <button class="btn-secondary" id="lv-unplan" style="width:100%;margin-bottom:8px;">Retirer de l'agenda (garder « Réceptionné »)</button>
+    <div class="sheet-actions"><button class="btn-secondary" id="lv-close" style="width:100%;">Fermer</button></div>
+  `);
+  document.getElementById("lv-close").onclick = closeSheet;
+  document.getElementById("lv-done").onclick = async () => {
+    l.statut = "livre"; l.livreLe = toISO(new Date());
+    await saveCommandes(all); closeSheet(); toast("Pièce livrée ✓"); refreshAgendaBody();
+  };
+  document.getElementById("lv-unplan").onclick = async () => {
+    l.livraisonDate = null; l.livraisonPeriode = null; l.livraisonOrdre = null;
+    await saveCommandes(all); closeSheet(); toast("Livraison retirée de l'agenda"); refreshAgendaBody();
+  };
+  document.getElementById("lv-move").onclick = () => openLivraisonPlanner(l.id, () => refreshAgendaBody());
+}
+
+// Propose les prochaines demi-journées de tournée proches du client, ou un jour au choix.
+async function openLivraisonPlanner(id, onDone) {
+  const all = await loadCommandes();
+  const l = all.find((x) => x.id === id);
+  if (!l) return;
+  const c = await DB.getClient(l.clientId);
+  const clients = await DB.listClients();
+  const cmap = Object.fromEntries(clients.map((x) => [x.id, x]));
+  const rdvs = (await DB.listRendezvous()).filter((r) => r.statut !== "honore");
+  const todayISO = toISO(new Date());
+  const horizon = toISO(addDays(new Date(), 60));
+  let radius = 10;
+
+  function propositions() {
+    if (!c || c.lat == null) return [];
+    const groups = {};
+    for (const r of rdvs) {
+      if (r.date < todayISO || r.date > horizon) continue;
+      const rc = cmap[r.clientId];
+      if (!rc || rc.lat == null) continue;
+      const per = r.periode === "matin" ? "matin" : "apres-midi";
+      const key = r.date + "|" + per;
+      const d = haversineKm(c.lat, c.lon, rc.lat, rc.lon);
+      const g = (groups[key] ||= { date: r.date, per, n: 0, min: Infinity, nearest: "" });
+      g.n++;
+      if (d < g.min) { g.min = d; g.nearest = clientFullName(rc); }
+    }
+    return Object.values(groups).filter((g) => g.min <= radius).sort((a, b) => a.date.localeCompare(b.date) || a.per.localeCompare(b.per));
+  }
+
+  function draw() {
+    const props = propositions();
+    openSheet(`
+      <h2>Planifier la livraison</h2>
+      <p class="near-hint" style="margin:-4px 0 8px;">${escapeHtml(l.nom)} — ${escapeHtml(clientFullName(c) || "Client")}${c && c.adresse ? "<br>" + escapeHtml(c.adresse) : ""}</p>
+      ${c && c.lat != null ? `
+        <label style="font-size:13px;font-weight:600;">Tournées à moins de</label>
+        <div class="pill-choice pill-4" id="lp-radius" style="margin:6px 0 10px;">
+          ${[5, 10, 15, 25].map((k) => `<button type="button" data-km="${k}" class="${radius === k ? "active period-active" : ""}">${k} km</button>`).join("")}
+        </div>
+        ${props.length ? props.map((g, i) => `
+          <button type="button" class="choice-tile lp-pick" data-i="${i}" style="margin-bottom:6px;">
+            <span>${fmtDateFullFR(g.date)} — ${g.per === "matin" ? "matin" : "après-midi"}<span class="sub">${g.n} RDV · le plus proche : ${escapeHtml(g.nearest)} (${g.min.toFixed(1)} km)</span></span>
+          </button>`).join("") : `<p class="near-hint">Aucune tournée à venir dans ce rayon (60 prochains jours).</p>`}
+      ` : `<p class="near-hint">Adresse du client non géocodée : choisis un jour manuellement.</p>`}
+      <div class="info-block" style="margin-top:10px;">
+        <h3>Un autre jour</h3>
+        <div class="form-row"><input type="date" id="lp-date" value="${todayISO}" /></div>
+        <div class="pill-choice" id="lp-per" style="margin-bottom:8px;">
+          <button type="button" data-val="matin" class="active period-active">Matin</button>
+          <button type="button" data-val="apres-midi">Après-midi</button>
+        </div>
+        <button class="btn-primary" id="lp-manual" style="width:100%;">Planifier ce jour</button>
+      </div>
+      <div class="sheet-actions"><button class="btn-secondary" id="lp-cancel" style="width:100%;">Annuler</button></div>
+    `);
+    document.querySelectorAll("#lp-radius button").forEach((b) => { b.onclick = () => { radius = parseInt(b.dataset.km, 10); draw(); }; });
+    document.querySelectorAll(".lp-pick").forEach((b) => { b.onclick = () => assign(props[parseInt(b.dataset.i, 10)].date, props[parseInt(b.dataset.i, 10)].per); });
+    let per = "matin";
+    document.querySelectorAll("#lp-per button").forEach((b) => {
+      b.onclick = () => { per = b.dataset.val; document.querySelectorAll("#lp-per button").forEach((x) => x.classList.remove("active", "period-active")); b.classList.add("active", "period-active"); };
+    });
+    document.getElementById("lp-manual").onclick = () => {
+      const d = document.getElementById("lp-date").value;
+      if (!d) { toast("Choisis une date"); return; }
+      assign(d, per);
+    };
+    document.getElementById("lp-cancel").onclick = () => { closeSheet(); if (onDone) onDone(); };
+  }
+  async function assign(date, per) {
+    l.livraisonDate = date; l.livraisonPeriode = per; l.livraisonOrdre = null;
+    await saveCommandes(all);
+    closeSheet();
+    toast(`Livraison planifiée : ${fmtDateFR(date)} ${per === "matin" ? "matin" : "après-midi"}`);
+    if (onDone) onDone();
+  }
+  draw();
+}
+
 let piecesFilter = "a_commander";
 async function openPiecesSheet() {
   const list = await loadCommandes();
@@ -389,7 +515,9 @@ async function openPiecesSheet() {
     const late = c.statut === "a_commander" && due && due <= todayISO;
     let tag = "";
     if (c.statut === "a_commander" && due) tag = late ? `<span class="piece-tag late">${due < todayISO ? "En retard — à commander avant le " : "À commander aujourd'hui ("}${fmtDateFR(due)}${due < todayISO ? "" : ")"}</span>` : `<span class="piece-tag">À commander avant le ${fmtDateFR(due)}</span>`;
-    else if (c.statut === "receptionne") tag = `<span class="piece-tag late">À livrer au client</span>`;
+    else if (c.statut === "receptionne") tag = c.livraisonDate
+      ? `<span class="piece-tag ${c.livraisonDate < todayISO ? "late" : ""}">📦 Livraison prévue le ${fmtDateFR(c.livraisonDate)} ${c.livraisonPeriode === "matin" ? "matin" : "après-midi"}${c.livraisonDate < todayISO ? " (dépassée)" : ""}</span>`
+      : `<span class="piece-tag late">À livrer — non planifiée</span>`;
     const mm = cl ? [cl.marque, cl.modele].filter(Boolean).join(" ") : "";
     const hist = [c.commandeLe && `commandé le ${fmtDateFR(c.commandeLe)}`, c.receptionneLe && `réceptionné le ${fmtDateFR(c.receptionneLe)}`, c.livreLe && `livré le ${fmtDateFR(c.livreLe)}`].filter(Boolean).join(" · ");
     const prev = PIECE_STATUTS[PIECE_STATUTS.findIndex((x) => x.key === c.statut) - 1];
@@ -403,6 +531,7 @@ async function openPiecesSheet() {
         ${tag}
         ${hist ? `<div class="near-hint" style="margin-top:4px;">${hist}</div>` : ""}
         <div style="display:flex;gap:6px;margin-top:8px;">
+          ${c.statut === "receptionne" ? `<button class="btn-secondary piece-plan" data-id="${c.id}" style="flex:1;">📅 ${c.livraisonDate ? "Replanifier" : "Planifier"}</button>` : ""}
           ${prev ? `<button class="btn-secondary piece-prev" data-id="${c.id}" style="flex:0 0 auto;">↩︎</button>` : ""}
           ${cl && cl.telephone ? `<a class="btn-secondary" href="tel:${cl.telephone.replace(/\s+/g, "")}" style="flex:0 0 auto;text-align:center;text-decoration:none;">📞</a>` : ""}
           ${st.next ? `<button class="btn-primary piece-next" data-id="${c.id}" style="flex:1;">${PIECE_STATUTS.find((x) => x.key === st.next).label === "Livré" ? "Marquer « Livré »" : st.nextLabel}</button>` : ""}
@@ -440,6 +569,7 @@ async function openPiecesSheet() {
     openPiecesSheet();
   };
   document.querySelectorAll(".piece-next").forEach((b) => { b.onclick = () => changeStatus(b.dataset.id, 1); });
+  document.querySelectorAll(".piece-plan").forEach((b) => { b.onclick = () => openLivraisonPlanner(b.dataset.id, () => openPiecesSheet()); });
   document.querySelectorAll(".piece-prev").forEach((b) => { b.onclick = () => changeStatus(b.dataset.id, -1); });
   document.querySelectorAll(".piece-del").forEach((b) => {
     b.onclick = async () => {
@@ -727,6 +857,7 @@ async function refreshAgendaBody() {
   const clientMap = Object.fromEntries(clients.map((c) => [c.id, c]));
   const today = new Date();
   const domicile = await getDomicileCoords();
+  const weekLivs = (await loadCommandes()).filter((c) => c.statut === "receptionne" && c.livraisonDate && c.livraisonDate >= startISO && c.livraisonDate <= endISO);
 
   let html = `
     <div class="week-nav">
@@ -750,7 +881,9 @@ async function refreshAgendaBody() {
   for (const d of days) {
     const iso = toISO(d);
     const isToday = isSameDay(d, today);
-    const items = (byDate[iso] || []).slice().sort((a, b) => (a.ordre ?? 0) - (b.ordre ?? 0));
+    const livsDay = weekLivs.filter((l) => l.livraisonDate === iso);
+    const items = [...(byDate[iso] || []), ...livsDay.map((l) => ({ _liv: l, id: "liv:" + l.id, clientId: l.clientId, periode: l.livraisonPeriode, ordre: l.livraisonOrdre ?? Infinity }))]
+      .sort((a, b) => (a.ordre ?? 0) - (b.ordre ?? 0));
     const pendingCount = items.filter((r) => r.statut !== "honore").length;
     const calEvents = await getCalendarEventsForDate(iso);
     const holiday = getZoneBHoliday(iso);
@@ -770,9 +903,9 @@ async function refreshAgendaBody() {
       ${pendingCount >= 2 ? `<button class="day-col-optimize" data-optimize="${iso}" title="Optimiser les trajets">
         <svg viewBox="0 0 24 24" width="13" height="13"><path fill="currentColor" d="M12 2c1 3-1 4-1 6 0 1.2 1 2 2 2 1.3 0 2-1 2-2.2 1.6 1.4 3 3.7 3 6.2a6 6 0 0 1-12 0c0-2.6 1.1-4.3 2.3-6C9.2 6.3 10.5 4.4 12 2Z"/></svg>
       </button>` : ""}
-      ${matinItems.length ? `<div class="day-period-label">Matin</div>${matinItems.map((r) => renderRdvChip(r, clientMap, domicile)).join("")}` : ""}
-      ${apremItems.length ? `<div class="day-period-label">Après-midi</div>${apremItems.map((r) => renderRdvChip(r, clientMap, domicile)).join("")}` : ""}
-      ${autresItems.length ? `<div class="day-period-label">Non précisé</div>${autresItems.map((r) => renderRdvChip(r, clientMap, domicile)).join("")}` : ""}
+      ${matinItems.length ? `<div class="day-period-label">Matin</div>${matinItems.map((r) => r._liv ? renderLivraisonChip(r._liv, clientMap) : renderRdvChip(r, clientMap, domicile)).join("")}` : ""}
+      ${apremItems.length ? `<div class="day-period-label">Après-midi</div>${apremItems.map((r) => r._liv ? renderLivraisonChip(r._liv, clientMap) : renderRdvChip(r, clientMap, domicile)).join("")}` : ""}
+      ${autresItems.length ? `<div class="day-period-label">Non précisé</div>${autresItems.map((r) => r._liv ? renderLivraisonChip(r._liv, clientMap) : renderRdvChip(r, clientMap, domicile)).join("")}` : ""}
       <button class="day-col-add" data-add="${iso}">+</button>
     </div>`;
   }
@@ -793,6 +926,9 @@ async function refreshAgendaBody() {
 
   container.querySelectorAll("[data-rdv-chip]").forEach((el) => {
     el.onclick = () => openRdvDetail(el.dataset.rdvChip);
+  });
+  container.querySelectorAll("[data-liv-chip]").forEach((el) => {
+    el.onclick = () => openLivraisonDetail(el.dataset.livChip);
   });
   container.querySelectorAll("[data-optimize]").forEach((el) => {
     el.onclick = () => optimizeDay(el.dataset.optimize);
@@ -969,7 +1105,7 @@ async function computeOptimizedRoute(rdvs, depart, forceFirstId, forceLastId) {
   let missing = 0;
   for (const r of rdvs) {
     const c = cmap[r.clientId];
-    if (c && c.lat != null) points.push({ id: r.id, lat: c.lat, lon: c.lon, name: clientFullName(c), badge: clientBadge(c) });
+    if (c && c.lat != null) points.push({ id: r.id, lat: c.lat, lon: c.lon, name: clientFullName(c), badge: (r._liv ? "📦 Livraison — " : "") + clientBadge(c) });
     else missing++;
   }
   if (points.length < 2) return { error: "Pas assez de clients géocodés sur cette période (minimum 2).", missing };
@@ -979,7 +1115,13 @@ async function computeOptimizedRoute(rdvs, depart, forceFirstId, forceLastId) {
     const r = rdvs.find((x) => x.id === rdvId);
     if (r) r.ordre = result.order.indexOf(rdvId);
   }
-  for (const r of rdvs) if (r.ordre != null && points.some((p) => p.id === r.id)) await DB.saveRendezvous(r);
+  const livs = rdvs.filter((r) => r._liv && r.ordre != null && points.some((p) => p.id === r.id));
+  for (const r of rdvs) if (!r._liv && r.ordre != null && points.some((p) => p.id === r.id)) await DB.saveRendezvous(r);
+  if (livs.length) {
+    const all = await loadCommandes();
+    for (const r of livs) { const c = all.find((x) => x.id === r._liv.id); if (c) c.livraisonOrdre = r.ordre; }
+    await saveCommandes(all);
+  }
 
   const names = result.order.map((id) => points.find((p) => p.id === id)).filter(Boolean).map((p) => `${p.badge}${escapeHtml(p.name)}`);
   return { names, missing, distanceKm: result.distanceKm, durationMin: result.durationMin, estimated: result.estimated, startsAtClient: !!forceFirstId };
@@ -988,6 +1130,10 @@ async function computeOptimizedRoute(rdvs, depart, forceFirstId, forceLastId) {
 // Orchestre l'optimisation Matin puis Après-midi séparément, puis affiche le résultat combiné.
 async function optimizeBothPeriods(dateISO, depart) {
   const allRdvs = (await DB.listRendezvous()).filter((r) => r.date === dateISO && r.statut !== "honore");
+  // Les livraisons de pièces planifiées ce jour-là sont des arrêts comme les autres.
+  for (const l of await listLivraisonsForDate(dateISO)) {
+    allRdvs.push({ id: "liv:" + l.id, clientId: l.clientId, periode: l.livraisonPeriode, ordre: l.livraisonOrdre, _liv: l });
+  }
   const groups = [
     { key: "matin", label: "Matin", rdvs: allRdvs.filter((r) => r.periode === "matin") },
     { key: "apres-midi", label: "Après-midi", rdvs: allRdvs.filter((r) => r.periode !== "matin") },

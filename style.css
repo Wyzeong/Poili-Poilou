@@ -1161,3 +1161,7 @@ input[type="checkbox"] { accent-color: var(--ember); width: 18px; height: 18px; 
 .home-btn.pieces-alert { border-color: var(--danger); }
 .pill-choice.pill-4 button { font-size: 11.5px; padding: 10px 2px; }
 .form-row .piece-line2 input.piece-jours { width: 70px; flex: 0 0 70px; }
+
+/* ---------- Livraison de pièces dans l'agenda ---------- */
+.liv-chip { border-left: 4px solid var(--amber, #d98a00); background: var(--amber-wash, #fff4dc); }
+.type-badge-livraison { background: var(--amber, #d98a00); color: #fff; }

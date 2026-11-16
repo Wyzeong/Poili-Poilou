@@ -1111,3 +1111,51 @@ input[type="checkbox"] { accent-color: var(--ember); width: 18px; height: 18px; 
   padding: 12px 14px;
   margin-top: 8px;
 }
+
+/* ---------- Suppression photo (uniquement depuis la visionneuse) ---------- */
+.lightbox-delete {
+  position: fixed;
+  bottom: calc(20px + var(--safe-bottom, 0px));
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 201;
+  padding: 12px 20px;
+  border-radius: 24px;
+  border: none;
+  background: rgba(255,255,255,0.18);
+  color: #fff;
+  font-size: 15px;
+}
+.lightbox-delete[hidden], .lightbox-confirm[hidden] { display: none; }
+.lightbox-confirm {
+  position: fixed;
+  inset: 0;
+  z-index: 202;
+  background: rgba(0,0,0,0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+.lightbox-confirm-box {
+  background: var(--surface);
+  color: var(--ink);
+  border-radius: 14px;
+  padding: 18px;
+  width: 100%;
+  max-width: 340px;
+}
+.lightbox-confirm-box p { margin: 0 0 14px; font-size: 15px; }
+
+/* ---------- Pièces à commander ---------- */
+.piece-row { margin-bottom: 8px; padding: 8px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); }
+.piece-row input.piece-nom { width: 100%; margin-bottom: 6px; }
+.piece-line2 { display: flex; gap: 6px; align-items: center; }
+.piece-line2 select { flex: 1; min-width: 0; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--ink); font-size: 14px; }
+.piece-line2 .piece-jours { width: 70px; }
+.piece-ok { margin-top: 6px; font-size: 12.5px; color: var(--moss); font-weight: 600; }
+.piece-tag { display: inline-block; font-size: 12.5px; font-weight: 600; color: var(--smoke); }
+.piece-tag.late { color: var(--danger); }
+.piece-item.is-late { border-left: 4px solid var(--danger); }
+.hb-badge { display: inline-block; min-width: 20px; padding: 0 6px; margin-left: 6px; border-radius: 10px; background: var(--ember); color: #fff; font-size: 12px; text-align: center; }
+.home-btn.pieces-alert { border-color: var(--danger); }

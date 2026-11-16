@@ -2,7 +2,7 @@
    Vues : Accueil / Agenda / Clients / Fiche client / Réglages
    Toute la donnée passe par DB (db.js → IndexedDB). */
 
-const APP_VERSION = "1.53.2"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
+const APP_VERSION = "1.54.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
 
 const JOURS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
 const JOURS_COURT = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
@@ -178,6 +178,18 @@ async function renderAccueil() {
     })
     .join(" · ");
 
+  const piecesAtraiter = await listPiecesATraiter();
+  const piecesLate = piecesAtraiter.filter((x) => x.due <= todayISO).length;
+  const piecesBtn = piecesAtraiter.length ? `
+      <button class="home-btn ${piecesLate ? "pieces-alert" : ""}" data-nav="pieces">
+        <span class="hb-icon"><svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M3 7l9-4 9 4v10l-9 4-9-4V7zm9-1.8L6.2 7.8 12 10.4l5.8-2.6L12 5.2zM5 9.4v6.3l6 2.7v-6.3L5 9.4zm14 0l-6 2.7v6.3l6-2.7V9.4z"/></svg></span>
+        <span class="hb-text">
+          <span class="hb-title">Pièces à commander <span class="hb-badge">${piecesAtraiter.length}</span></span>
+          <span class="hb-sub">${piecesLate ? `${piecesLate} à passer maintenant` : "Aucune urgence pour l'instant"}</span>
+        </span>
+        <svg class="hb-chev" viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>` : "";
+
   root.innerHTML = `
     <p class="home-greeting">${upcoming > 0 ? `${upcoming} rendez-vous à venir` : "Aucun rendez-vous planifié pour l'instant"}</p>
     ${yearBreakdown ? `<p class="home-greeting-sub">${yearBreakdown}</p>` : ""}
@@ -198,6 +210,7 @@ async function renderAccueil() {
         </span>
         <svg class="hb-chev" viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </button>
+      ${piecesBtn}
       <button class="home-btn" data-nav="clients">
         <span class="hb-icon"><svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M12 12a5 5 0 1 0 0-10 5 5 0 0 0 0 10zm0 2c-4.4 0-8 2.2-8 5v3h16v-3c0-2.8-3.6-5-8-5z"/></svg></span>
         <span class="hb-text">
@@ -234,11 +247,73 @@ async function renderAccueil() {
   `;
 
   root.querySelector('[data-nav="agenda"]').onclick = () => navigate("agenda");
+  const pb = root.querySelector('[data-nav="pieces"]');
+  if (pb) pb.onclick = () => openPiecesSheet();
   root.querySelector('[data-nav="clients"]').onclick = () => navigate("clients");
   root.querySelector('[data-nav="reglages"]').onclick = () => navigate("reglages");
   root.querySelector('[data-nav="rdv-new"]').onclick = () => openRdvForm();
   root.querySelector('[data-nav="recap-honores"]').onclick = () => openRecapHonores();
   root.querySelector('[data-nav="devis"]').onclick = () => openDevisForm();
+}
+
+// ---------- Pièces à commander ----------
+const PIECE_DELAIS = [
+  { jours: 7, label: "1 semaine" },
+  { jours: 14, label: "2 semaines" },
+  { jours: 21, label: "3 semaines" },
+  { jours: 30, label: "1 mois" },
+  { jours: 60, label: "2 mois" },
+];
+function pieceDueISO(r, p) {
+  const [y, m, d] = r.date.split("-").map(Number);
+  return toISO(addDays(new Date(y, m - 1, d), -(p.delaiJours || 0)));
+}
+// Toutes les pièces non confirmées des RDV non honorés, triées par date limite de commande.
+async function listPiecesATraiter() {
+  const rdvs = await DB.listRendezvous();
+  const out = [];
+  for (const r of rdvs) {
+    if (r.statut === "honore") continue;
+    for (const p of r.pieces || []) {
+      if (!p.confirmee) out.push({ r, p, due: pieceDueISO(r, p) });
+    }
+  }
+  return out.sort((a, b) => a.due.localeCompare(b.due));
+}
+async function openPiecesSheet() {
+  const list = await listPiecesATraiter();
+  const clients = await DB.listClients();
+  const cmap = Object.fromEntries(clients.map((c) => [c.id, c]));
+  const todayISO = toISO(new Date());
+  const rows = list.map(({ r, p, due }) => {
+    const late = due < todayISO, today = due === todayISO;
+    const tag = late ? `<span class="piece-tag late">En retard (${fmtDateFR(due)})</span>`
+      : today ? `<span class="piece-tag late">À commander aujourd'hui</span>`
+      : `<span class="piece-tag">À commander avant le ${fmtDateFR(due)}</span>`;
+    return `
+      <div class="info-block piece-item ${late || today ? "is-late" : ""}">
+        <div style="font-weight:600;">${escapeHtml(p.nom)}</div>
+        <div class="near-hint" style="margin:2px 0 6px;">${escapeHtml(clientFullName(cmap[r.clientId]) || "Client")} — RDV du ${fmtDateFR(r.date)}</div>
+        ${tag}
+        <button class="btn-primary piece-confirm" data-rdv="${r.id}" data-piece="${p.id}" style="width:100%;margin-top:8px;">Commande confirmée ✓</button>
+      </div>`;
+  }).join("");
+  openSheet(`
+    <h2>Pièces à commander</h2>
+    ${list.length ? rows : `<p class="near-hint">Aucune pièce en attente de commande.</p>`}
+    <div class="sheet-actions"><button class="btn-secondary" id="ok-btn" style="width:100%;">Fermer</button></div>
+  `);
+  document.getElementById("ok-btn").onclick = () => { closeSheet(); if (state.view === "accueil") render(); };
+  document.querySelectorAll(".piece-confirm").forEach((b) => {
+    b.onclick = async () => {
+      const rdv = (await DB.listRendezvous()).find((x) => x.id === b.dataset.rdv);
+      if (!rdv) return;
+      const p = (rdv.pieces || []).find((x) => x.id === b.dataset.piece);
+      if (p) { p.confirmee = true; p.confirmeeLe = toISO(new Date()); await DB.saveRendezvous(rdv); }
+      toast("Commande confirmée");
+      openPiecesSheet();
+    };
+  });
 }
 
 // ---------- Récapitulatif RDV honorés (facturation) ----------
@@ -760,6 +835,7 @@ async function optimizeBothPeriods(dateISO, depart) {
         <div class="near-list">${steps.map((n, i) => `<div class="near-item"><span>${i + 1}. ${n}</span></div>`).join("")}</div>
         <div class="info-row" style="margin-top:8px;"><span class="k">Distance</span><span class="v">${o.distanceKm.toFixed(1)} km</span></div>
         ${o.durationMin != null ? `<div class="info-row"><span class="k">Durée estimée</span><span class="v">${Math.round(o.durationMin)} min</span></div>` : ""}
+        <p style="color:var(--smoke);font-size:11.5px;margin:6px 0 0;">Ordre choisi pour le trajet le plus rapide (temps de route), retour au départ inclus. La distance est celle de ce trajet.</p>
       </div>
     `;
   }).join("");
@@ -1008,17 +1084,15 @@ async function renderFiche() {
   document.getElementById("client-photo-camera-input").onchange = (e) => handleClientPhotoFiles(e.target.files);
   document.getElementById("client-photo-add-btn").onclick = () => document.getElementById("client-photo-input").click();
   document.getElementById("client-photo-input").onchange = (e) => handleClientPhotoFiles(e.target.files);
-  document.querySelectorAll("#client-photos-grid .photo-remove").forEach((btn) => {
-    btn.onclick = async () => {
-      const idx = parseInt(btn.dataset.idx, 10);
-      const fresh = await DB.getClient(c.id);
-      if (fresh) {
-        fresh.photos = (fresh.photos || []).filter((_, i) => i !== idx);
-        await DB.saveClient(fresh);
-        render();
-      }
-    };
-  });
+  // La suppression se fait uniquement depuis la photo agrandie (voir visionneuse).
+  photoDeleters["client-photos-grid"] = async (idx) => {
+    const fresh = await DB.getClient(c.id);
+    if (fresh) {
+      fresh.photos = (fresh.photos || []).filter((_, i) => i !== idx);
+      await DB.saveClient(fresh);
+      render();
+    }
+  };
 
   const retryBtn = document.getElementById("retry-geo-btn");
   if (retryBtn) {
@@ -2131,12 +2205,28 @@ function lbDist(t0, t1) {
   return Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY);
 }
 
-function openPhotoLightbox(src) {
+const photoDeleters = {};   // id de la grille -> fonction(idx) de suppression
+let lbDeleteFn = null;
+const lbDeleteBtn = document.getElementById("lightbox-delete-btn");
+const lbConfirm = document.getElementById("lightbox-confirm");
+function openPhotoLightbox(src, onDelete) {
   lightboxImg.src = src;
   lbResetZoom();
+  lbDeleteFn = onDelete || null;
+  lbDeleteBtn.hidden = !lbDeleteFn;
+  lbConfirm.hidden = true;
   photoLightbox.hidden = false;
 }
+lbDeleteBtn.onclick = () => { lbConfirm.hidden = false; };
+document.getElementById("lightbox-confirm-no").onclick = () => { lbConfirm.hidden = true; };
+document.getElementById("lightbox-confirm-yes").onclick = async () => {
+  const fn = lbDeleteFn;
+  closePhotoLightbox();
+  if (fn) { await fn(); toast("Photo supprimée"); }
+};
 function closePhotoLightbox() {
+  lbConfirm.hidden = true;
+  lbDeleteFn = null;
   photoLightbox.hidden = true;
   lightboxImg.src = "";
   lbResetZoom();
@@ -2147,7 +2237,12 @@ photoLightbox.addEventListener("click", (e) => { if (e.target === photoLightbox)
 // historique d'intervention) sans avoir à câbler chaque emplacement séparément.
 document.addEventListener("click", (e) => {
   const img = e.target.closest(".photo-thumb img");
-  if (img) openPhotoLightbox(img.src);
+  if (!img) return;
+  const grid = img.closest("[id$='-photos-grid']");
+  const thumb = img.closest(".photo-thumb");
+  const del = grid && photoDeleters[grid.id];
+  const idx = parseInt(thumb.dataset.idx, 10);
+  openPhotoLightbox(img.src, del && !isNaN(idx) ? () => del(idx) : null);
 });
 
 lightboxScroll.addEventListener("touchstart", (e) => {
@@ -2710,6 +2805,11 @@ async function openRdvForm(prefill = {}, existing) {
         <button type="button" data-val="depannage" class="${type === "depannage" ? "active type-depannage" : ""}">Dépannage</button>
       </div>
     </div>
+    <div class="form-row">
+      <label>Pièce à commander (facultatif)</label>
+      <div id="f-pieces"></div>
+      <button type="button" class="btn-secondary" id="add-piece-btn" style="width:100%;margin-top:6px;">+ Ajouter une pièce à commander</button>
+    </div>
     <div class="form-row"><label>Commentaire (facultatif)</label><textarea id="f-comment">${escapeHtml(r.commentaire || "")}</textarea></div>
     <div id="near-container"></div>
     <div class="info-block" style="margin-top:2px;">
@@ -2950,6 +3050,45 @@ async function openRdvForm(prefill = {}, existing) {
     };
   });
 
+  // ---------- Pièces à commander ----------
+  let pieces = (r.pieces || []).map((p) => ({ ...p }));
+  function renderPiecesEditor() {
+    const el = document.getElementById("f-pieces");
+    el.innerHTML = pieces.map((p, i) => {
+      const preset = PIECE_DELAIS.some((d) => d.jours === p.delaiJours);
+      return `
+      <div class="piece-row" data-idx="${i}">
+        <input type="text" class="piece-nom" value="${escapeAttr(p.nom)}" placeholder="Ex : joint de porte, bougie…" />
+        <div class="piece-line2">
+          <select class="piece-delai">
+            ${PIECE_DELAIS.map((d) => `<option value="${d.jours}" ${p.delaiJours === d.jours ? "selected" : ""}>Commander ${d.label} avant</option>`).join("")}
+            <option value="custom" ${preset ? "" : "selected"}>Autre délai (jours)…</option>
+          </select>
+          <input type="text" inputmode="numeric" class="piece-jours" value="${preset ? "" : escapeAttr(String(p.delaiJours))}" placeholder="jours" ${preset ? "hidden" : ""} />
+          <button type="button" class="ma-remove piece-remove" aria-label="Retirer">✕</button>
+        </div>
+        ${p.confirmee ? `<div class="piece-ok">✓ Commande confirmée</div>` : ""}
+      </div>`;
+    }).join("");
+    el.querySelectorAll(".piece-row").forEach((row) => {
+      const i = parseInt(row.dataset.idx, 10);
+      const sel = row.querySelector(".piece-delai");
+      const jours = row.querySelector(".piece-jours");
+      row.querySelector(".piece-nom").oninput = (e) => { pieces[i].nom = e.target.value; };
+      sel.onchange = () => {
+        if (sel.value === "custom") { jours.hidden = false; jours.focus(); }
+        else { jours.hidden = true; pieces[i].delaiJours = parseInt(sel.value, 10); }
+      };
+      jours.oninput = () => { const n = parseInt(jours.value, 10); if (n >= 0) pieces[i].delaiJours = n; };
+      row.querySelector(".piece-remove").onclick = () => { pieces.splice(i, 1); renderPiecesEditor(); };
+    });
+  }
+  document.getElementById("add-piece-btn").onclick = () => {
+    pieces.push({ id: uid(), nom: "", delaiJours: 14, confirmee: false });
+    renderPiecesEditor();
+  };
+  renderPiecesEditor();
+
   document.getElementById("cancel-btn").onclick = closeSheet;
   document.getElementById("save-btn").onclick = async () => {
     if (!selectedClientId) { toast("Sélectionne ou crée un client"); return; }
@@ -2965,6 +3104,7 @@ async function openRdvForm(prefill = {}, existing) {
       adresse: client.adresse,
       commentaire: document.getElementById("f-comment").value.trim(),
       ordre: r.ordre ?? Date.now(),
+      pieces: pieces.filter((p) => p.nom.trim()).map((p) => ({ ...p, nom: p.nom.trim() })),
     };
     await DB.saveRendezvous(item);
     closeSheet();
@@ -3240,6 +3380,17 @@ async function openHonoreForm(r, client) {
   `);
 
   // ---------- Montant : articles + calcul du total ----------
+  // Le montant du chèque unique / virement suit le Total TTC en direct,
+  // tant qu'il n'a pas été modifié à la main.
+  let payAmountTouched = !!((cheques[0] && cheques[0].montant) || virement.montant);
+  function syncPaiementAmount(t) {
+    if (payAmountTouched || !t) return;
+    const val = t.totalTTC > 0 ? fmtMontant(t.totalTTC) : "";
+    const ch = document.getElementById("f-cheque-montant-0");
+    if (mode === "cheque" && cheques.length === 1 && ch) { ch.value = val; cheques[0].montant = val; }
+    const vi = document.getElementById("f-virement-montant");
+    if (mode === "virement" && vi) { vi.value = val; virement.montant = val; }
+  }
   function refreshMontantTotal() {
     const m = {
       entretienHT: document.getElementById("f-entretien-ht").value,
@@ -3251,6 +3402,7 @@ async function openHonoreForm(r, client) {
       <div class="info-row"><span class="k">Total HT</span><span class="v">${fmtMontant(t.totalHT)}€</span></div>
       <div class="info-row" style="border-top:1px solid var(--line);"><span class="k" style="font-weight:700;">Total TTC (TVA 10%)</span><span class="v" style="font-weight:700;color:var(--ember);">${fmtMontant(t.totalTTC)}€</span></div>
     `;
+    syncPaiementAmount(t);
     return t;
   }
 
@@ -3383,6 +3535,8 @@ async function openHonoreForm(r, client) {
         <div class="form-row"><label>Montant du virement (€)</label><input type="text" inputmode="decimal" id="f-virement-montant" value="${escapeAttr(virement.montant)}" /></div>
         <div class="form-row"><label>Commentaire (facultatif)</label><input type="text" id="f-virement-comment" value="${escapeAttr(virement.commentaire)}" /></div>
       `;
+      document.getElementById("f-virement-montant").oninput = () => { payAmountTouched = true; };
+      refreshMontantTotal();
     }
   }
 
@@ -3396,27 +3550,22 @@ async function openHonoreForm(r, client) {
         <div class="form-row"><label>Commentaire (facultatif)</label><input type="text" id="f-cheque-comment-${i}" value="${escapeAttr(c.commentaire)}" /></div>
       </div>
     `).join("");
-    // S'il n'y a qu'un seul chèque et qu'aucun montant n'a encore été saisi à la main,
-    // pré-remplit avec le total TTC calculé dans la section Montant, juste au-dessus.
-    if (cheques.length === 1 && !cheques[0].montant) {
-      const t = refreshMontantTotal();
-      if (t && t.totalTTC > 0) {
-        const input = document.getElementById("f-cheque-montant-0");
-        if (input) input.value = fmtMontant(t.totalTTC);
-      }
-    }
+    cheques.forEach((_, i) => {
+      const inp = document.getElementById(`f-cheque-montant-${i}`);
+      if (inp) inp.oninput = () => { payAmountTouched = true; };
+    });
+    // Un seul chèque : son montant suit le Total TTC (sauf modification manuelle).
+    refreshMontantTotal();
   }
 
   renderDetails();
 
   function renderHonorePhotosGrid() {
     document.getElementById("honore-photos-grid").innerHTML = photoGridHtml(honorePhotos, true);
-    document.querySelectorAll("#honore-photos-grid .photo-remove").forEach((btn) => {
-      btn.onclick = () => {
-        honorePhotos = honorePhotos.filter((_, i) => i !== parseInt(btn.dataset.idx, 10));
-        renderHonorePhotosGrid();
-      };
-    });
+    photoDeleters["honore-photos-grid"] = (idx) => {
+      honorePhotos = honorePhotos.filter((_, i) => i !== idx);
+      renderHonorePhotosGrid();
+    };
   }
   async function handleHonorePhotoFiles(files) {
     const newPhotos = await resizeImageFilesToDataURLs(files);
@@ -3664,9 +3813,8 @@ async function resizeImageFilesToDataURLs(fileList) {
 function photoGridHtml(photos, removable) {
   if (!photos || photos.length === 0) return "";
   return `<div class="photo-grid">${photos.map((src, i) => `
-    <div class="photo-thumb">
+    <div class="photo-thumb" data-idx="${i}">
       <img src="${src}" alt="" />
-      ${removable ? `<button type="button" class="photo-remove" data-idx="${i}" aria-label="Supprimer">×</button>` : ""}
     </div>
   `).join("")}</div>`;
 }

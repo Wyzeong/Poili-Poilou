@@ -68,6 +68,16 @@
 
   <div id="photo-lightbox" class="lightbox-backdrop" hidden>
     <button id="lightbox-close-btn" class="lightbox-close" aria-label="Fermer">✕</button>
+    <button id="lightbox-delete-btn" class="lightbox-delete" hidden>🗑 Supprimer cette photo</button>
+    <div id="lightbox-confirm" class="lightbox-confirm" hidden>
+      <div class="lightbox-confirm-box">
+        <p>Supprimer cette photo ? Cette action est définitive.</p>
+        <div class="sheet-actions">
+          <button type="button" class="btn-secondary" id="lightbox-confirm-no">Non</button>
+          <button type="button" class="btn-danger" id="lightbox-confirm-yes">Oui, supprimer</button>
+        </div>
+      </div>
+    </div>
     <div class="lightbox-scroll">
       <img id="lightbox-img" src="" alt="" />
     </div>

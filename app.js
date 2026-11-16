@@ -2,7 +2,7 @@
    Vues : Accueil / Agenda / Clients / Fiche client / Réglages
    Toute la donnée passe par DB (db.js → IndexedDB). */
 
-const APP_VERSION = "1.54.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
+const APP_VERSION = "1.55.0"; // Bumper ce numéro (et CACHE_NAME dans sw.js) à chaque mise à jour livrée.
 
 const JOURS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
 const JOURS_COURT = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
@@ -178,17 +178,19 @@ async function renderAccueil() {
     })
     .join(" · ");
 
-  const piecesAtraiter = await listPiecesATraiter();
-  const piecesLate = piecesAtraiter.filter((x) => x.due <= todayISO).length;
-  const piecesBtn = piecesAtraiter.length ? `
-      <button class="home-btn ${piecesLate ? "pieces-alert" : ""}" data-nav="pieces">
+  const ps = await piecesSummary();
+  const piecesUrgent = ps.late + ps.receptionne;
+  const piecesSub = ps.total === 0 ? "Aucune pièce en cours"
+    : [ps.aCommander && `${ps.aCommander} à commander`, ps.commande && `${ps.commande} commandée${ps.commande > 1 ? "s" : ""}`, ps.receptionne && `${ps.receptionne} à livrer`].filter(Boolean).join(" · ");
+  const piecesBtn = `
+      <button class="home-btn ${piecesUrgent ? "pieces-alert" : ""}" data-nav="pieces">
         <span class="hb-icon"><svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M3 7l9-4 9 4v10l-9 4-9-4V7zm9-1.8L6.2 7.8 12 10.4l5.8-2.6L12 5.2zM5 9.4v6.3l6 2.7v-6.3L5 9.4zm14 0l-6 2.7v6.3l6-2.7V9.4z"/></svg></span>
         <span class="hb-text">
-          <span class="hb-title">Pièces à commander <span class="hb-badge">${piecesAtraiter.length}</span></span>
-          <span class="hb-sub">${piecesLate ? `${piecesLate} à passer maintenant` : "Aucune urgence pour l'instant"}</span>
+          <span class="hb-title">Pièces à commander ${ps.total ? `<span class="hb-badge">${ps.total}</span>` : ""}</span>
+          <span class="hb-sub">${piecesSub}</span>
         </span>
         <svg class="hb-chev" viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      </button>` : "";
+      </button>`;
 
   root.innerHTML = `
     <p class="home-greeting">${upcoming > 0 ? `${upcoming} rendez-vous à venir` : "Aucun rendez-vous planifié pour l'instant"}</p>
@@ -247,8 +249,7 @@ async function renderAccueil() {
   `;
 
   root.querySelector('[data-nav="agenda"]').onclick = () => navigate("agenda");
-  const pb = root.querySelector('[data-nav="pieces"]');
-  if (pb) pb.onclick = () => openPiecesSheet();
+  root.querySelector('[data-nav="pieces"]').onclick = () => openPiecesSheet();
   root.querySelector('[data-nav="clients"]').onclick = () => navigate("clients");
   root.querySelector('[data-nav="reglages"]').onclick = () => navigate("reglages");
   root.querySelector('[data-nav="rdv-new"]').onclick = () => openRdvForm();
@@ -257,6 +258,9 @@ async function renderAccueil() {
 }
 
 // ---------- Pièces à commander ----------
+// Stockées dans le paramètre "commandes" : liste de
+// { id, nom, clientId, rdvId|null, delaiJours|null, statut, creeLe, commandeLe, receptionneLe, livreLe }
+// statut : "a_commander" | "commande" | "receptionne" | "livre"
 const PIECE_DELAIS = [
   { jours: 7, label: "1 semaine" },
   { jours: 14, label: "2 semaines" },
@@ -264,56 +268,234 @@ const PIECE_DELAIS = [
   { jours: 30, label: "1 mois" },
   { jours: 60, label: "2 mois" },
 ];
-function pieceDueISO(r, p) {
-  const [y, m, d] = r.date.split("-").map(Number);
-  return toISO(addDays(new Date(y, m - 1, d), -(p.delaiJours || 0)));
-}
-// Toutes les pièces non confirmées des RDV non honorés, triées par date limite de commande.
-async function listPiecesATraiter() {
-  const rdvs = await DB.listRendezvous();
-  const out = [];
-  for (const r of rdvs) {
-    if (r.statut === "honore") continue;
-    for (const p of r.pieces || []) {
-      if (!p.confirmee) out.push({ r, p, due: pieceDueISO(r, p) });
+const PIECE_STATUTS = [
+  { key: "a_commander", label: "À commander", next: "commande", nextLabel: "Marquer « Commandé »" },
+  { key: "commande", label: "Commandé", next: "receptionne", nextLabel: "Marquer « Réceptionné »" },
+  { key: "receptionne", label: "Réceptionné", next: "livre", nextLabel: "Marquer « Livré »" },
+  { key: "livre", label: "Livré", next: null, nextLabel: "" },
+];
+async function loadCommandes() {
+  let list = await DB.getParam("commandes", []);
+  // Migration unique : pièces saisies en v1.54.0 directement dans les RDV.
+  if (!(await DB.getParam("commandesMigrated", false))) {
+    for (const r of await DB.listRendezvous()) {
+      if (!r.pieces || !r.pieces.length) continue;
+      for (const p of r.pieces) {
+        list.push({ id: p.id || uid(), nom: p.nom, clientId: r.clientId, rdvId: r.id, delaiJours: p.delaiJours ?? null,
+          statut: p.confirmee ? "commande" : "a_commander", creeLe: toISO(new Date()), commandeLe: p.confirmeeLe || null });
+      }
+      delete r.pieces;
+      await DB.saveRendezvous(r);
     }
+    await DB.setParam("commandes", list);
+    await DB.setParam("commandesMigrated", true);
   }
-  return out.sort((a, b) => a.due.localeCompare(b.due));
+  return list;
 }
+async function saveCommandes(list) { await DB.setParam("commandes", list); }
+
+// Date limite de commande : seulement pour une pièce liée à un RDV à venir avec un délai.
+function pieceDueISO(c, rdvMap) {
+  const r = c.rdvId && rdvMap[c.rdvId];
+  if (!r || r.statut === "honore" || c.delaiJours == null) return null;
+  const [y, m, d] = r.date.split("-").map(Number);
+  return toISO(addDays(new Date(y, m - 1, d), -c.delaiJours));
+}
+// Résumé pour l'accueil : nombre de pièces en cours et d'actions urgentes.
+async function piecesSummary() {
+  const list = (await loadCommandes()).filter((c) => c.statut !== "livre");
+  const rdvMap = Object.fromEntries((await DB.listRendezvous()).map((r) => [r.id, r]));
+  const todayISO = toISO(new Date());
+  const count = (k) => list.filter((c) => c.statut === k).length;
+  const late = list.filter((c) => c.statut === "a_commander" && pieceDueISO(c, rdvMap) && pieceDueISO(c, rdvMap) <= todayISO).length;
+  return { total: list.length, aCommander: count("a_commander"), commande: count("commande"), receptionne: count("receptionne"), late };
+}
+
+// Éditeur de pièces réutilisable (prise de RDV, RDV honoré).
+function createPiecesEditor(container, addBtn, initial, withDelay) {
+  let pieces = initial.map((p) => ({ ...p }));
+  function render() {
+    container.innerHTML = pieces.map((p, i) => {
+      const preset = PIECE_DELAIS.some((d) => d.jours === p.delaiJours);
+      const st = PIECE_STATUTS.find((x) => x.key === p.statut);
+      return `
+      <div class="piece-row" data-idx="${i}">
+        <input type="text" class="piece-nom" value="${escapeAttr(p.nom)}" placeholder="Ex : joint de porte, bougie…" />
+        ${withDelay ? `<div class="piece-line2">
+          <select class="piece-delai">
+            ${PIECE_DELAIS.map((d) => `<option value="${d.jours}" ${p.delaiJours === d.jours ? "selected" : ""}>Commander ${d.label} avant</option>`).join("")}
+            <option value="custom" ${preset ? "" : "selected"}>Autre délai (jours)…</option>
+          </select>
+          <input type="text" inputmode="numeric" class="piece-jours" value="${preset ? "" : escapeAttr(String(p.delaiJours ?? ""))}" placeholder="jours" ${preset ? "hidden" : ""} />
+          <button type="button" class="ma-remove piece-remove" aria-label="Retirer">✕</button>
+        </div>` : `<div class="piece-line2"><span style="flex:1"></span><button type="button" class="ma-remove piece-remove" aria-label="Retirer">✕</button></div>`}
+        ${p.statut && p.statut !== "a_commander" ? `<div class="piece-ok">${st ? st.label : ""}</div>` : ""}
+      </div>`;
+    }).join("");
+    container.querySelectorAll(".piece-row").forEach((row) => {
+      const i = parseInt(row.dataset.idx, 10);
+      row.querySelector(".piece-nom").oninput = (e) => { pieces[i].nom = e.target.value; };
+      row.querySelector(".piece-remove").onclick = () => { pieces.splice(i, 1); render(); };
+      const sel = row.querySelector(".piece-delai");
+      if (sel) {
+        const jours = row.querySelector(".piece-jours");
+        sel.onchange = () => {
+          if (sel.value === "custom") { jours.hidden = false; jours.focus(); }
+          else { jours.hidden = true; pieces[i].delaiJours = parseInt(sel.value, 10); }
+        };
+        jours.oninput = () => { const n = parseInt(jours.value, 10); if (n >= 0) pieces[i].delaiJours = n; };
+      }
+    });
+  }
+  addBtn.onclick = () => {
+    pieces.push({ id: uid(), nom: "", delaiJours: withDelay ? 14 : null, statut: "a_commander", isNew: true });
+    render();
+  };
+  render();
+  return { getList: () => pieces.filter((p) => p.nom.trim()).map((p) => ({ ...p, nom: p.nom.trim() })) };
+}
+// Enregistre les pièces d'un RDV (ajouts, modifications, suppressions de ce RDV uniquement).
+async function savePiecesForRdv(rdv, edited, withDelay) {
+  const all = await loadCommandes();
+  const others = all.filter((c) => c.rdvId !== rdv.id);
+  const oldMap = Object.fromEntries(all.filter((c) => c.rdvId === rdv.id).map((c) => [c.id, c]));
+  const mine = edited.map((p) => {
+    const old = oldMap[p.id];
+    if (old) return { ...old, nom: p.nom, delaiJours: withDelay ? p.delaiJours : old.delaiJours };
+    return { id: p.id, nom: p.nom, clientId: rdv.clientId, rdvId: rdv.id, delaiJours: withDelay ? p.delaiJours : null,
+      statut: "a_commander", creeLe: toISO(new Date()) };
+  });
+  await saveCommandes([...others, ...mine]);
+}
+
+let piecesFilter = "a_commander";
 async function openPiecesSheet() {
-  const list = await listPiecesATraiter();
+  const list = await loadCommandes();
   const clients = await DB.listClients();
   const cmap = Object.fromEntries(clients.map((c) => [c.id, c]));
+  const rdvMap = Object.fromEntries((await DB.listRendezvous()).map((r) => [r.id, r]));
   const todayISO = toISO(new Date());
-  const rows = list.map(({ r, p, due }) => {
-    const late = due < todayISO, today = due === todayISO;
-    const tag = late ? `<span class="piece-tag late">En retard (${fmtDateFR(due)})</span>`
-      : today ? `<span class="piece-tag late">À commander aujourd'hui</span>`
-      : `<span class="piece-tag">À commander avant le ${fmtDateFR(due)}</span>`;
+  const counts = Object.fromEntries(PIECE_STATUTS.map((s) => [s.key, list.filter((c) => c.statut === s.key).length]));
+  const shown = list.filter((c) => c.statut === piecesFilter).sort((a, b) => {
+    const da = pieceDueISO(a, rdvMap) || "9999", db = pieceDueISO(b, rdvMap) || "9999";
+    return da.localeCompare(db) || (a.creeLe || "").localeCompare(b.creeLe || "");
+  });
+  const st = PIECE_STATUTS.find((s) => s.key === piecesFilter);
+
+  const rows = shown.map((c) => {
+    const cl = cmap[c.clientId];
+    const due = pieceDueISO(c, rdvMap);
+    const rdv = c.rdvId && rdvMap[c.rdvId];
+    const late = c.statut === "a_commander" && due && due <= todayISO;
+    let tag = "";
+    if (c.statut === "a_commander" && due) tag = late ? `<span class="piece-tag late">${due < todayISO ? "En retard — à commander avant le " : "À commander aujourd'hui ("}${fmtDateFR(due)}${due < todayISO ? "" : ")"}</span>` : `<span class="piece-tag">À commander avant le ${fmtDateFR(due)}</span>`;
+    else if (c.statut === "receptionne") tag = `<span class="piece-tag late">À livrer au client</span>`;
+    const mm = cl ? [cl.marque, cl.modele].filter(Boolean).join(" ") : "";
+    const hist = [c.commandeLe && `commandé le ${fmtDateFR(c.commandeLe)}`, c.receptionneLe && `réceptionné le ${fmtDateFR(c.receptionneLe)}`, c.livreLe && `livré le ${fmtDateFR(c.livreLe)}`].filter(Boolean).join(" · ");
+    const prev = PIECE_STATUTS[PIECE_STATUTS.findIndex((x) => x.key === c.statut) - 1];
     return `
-      <div class="info-block piece-item ${late || today ? "is-late" : ""}">
-        <div style="font-weight:600;">${escapeHtml(p.nom)}</div>
-        <div class="near-hint" style="margin:2px 0 6px;">${escapeHtml(clientFullName(cmap[r.clientId]) || "Client")} — RDV du ${fmtDateFR(r.date)}</div>
+      <div class="info-block piece-item ${late || c.statut === "receptionne" ? "is-late" : ""}">
+        <div style="font-weight:700;font-size:16px;">${escapeHtml(c.nom)}</div>
+        <div style="margin:3px 0;font-weight:600;">${escapeHtml(clientFullName(cl) || "Client")}</div>
+        <div class="near-hint" style="margin:0 0 2px;">Poêle : ${mm ? escapeHtml(mm) : "marque / modèle non renseignés"}</div>
+        ${cl && cl.adresse ? `<div class="near-hint" style="margin:0 0 2px;">${escapeHtml(cl.adresse)}</div>` : ""}
+        ${rdv ? `<div class="near-hint" style="margin:0 0 4px;">RDV ${rdv.statut === "honore" ? "honoré" : "prévu"} le ${fmtDateFR(rdv.date)}</div>` : `<div class="near-hint" style="margin:0 0 4px;">Sans rendez-vous associé</div>`}
         ${tag}
-        <button class="btn-primary piece-confirm" data-rdv="${r.id}" data-piece="${p.id}" style="width:100%;margin-top:8px;">Commande confirmée ✓</button>
+        ${hist ? `<div class="near-hint" style="margin-top:4px;">${hist}</div>` : ""}
+        <div style="display:flex;gap:6px;margin-top:8px;">
+          ${prev ? `<button class="btn-secondary piece-prev" data-id="${c.id}" style="flex:0 0 auto;">↩︎</button>` : ""}
+          ${cl && cl.telephone ? `<a class="btn-secondary" href="tel:${cl.telephone.replace(/\s+/g, "")}" style="flex:0 0 auto;text-align:center;text-decoration:none;">📞</a>` : ""}
+          ${st.next ? `<button class="btn-primary piece-next" data-id="${c.id}" style="flex:1;">${PIECE_STATUTS.find((x) => x.key === st.next).label === "Livré" ? "Marquer « Livré »" : st.nextLabel}</button>` : ""}
+          <button class="btn-danger piece-del" data-id="${c.id}" style="flex:0 0 auto;" aria-label="Supprimer">🗑</button>
+        </div>
       </div>`;
   }).join("");
+
   openSheet(`
     <h2>Pièces à commander</h2>
-    ${list.length ? rows : `<p class="near-hint">Aucune pièce en attente de commande.</p>`}
+    <div class="pill-choice pill-4" id="pieces-tabs" style="margin-bottom:10px;">
+      ${PIECE_STATUTS.map((s) => `<button type="button" data-val="${s.key}" class="${piecesFilter === s.key ? "active period-active" : ""}">${s.label}${counts[s.key] ? ` (${counts[s.key]})` : ""}</button>`).join("")}
+    </div>
+    ${shown.length ? rows : `<p class="near-hint">Rien dans « ${st.label} ».</p>`}
+    <button class="btn-primary" id="piece-add-btn" style="width:100%;margin-top:6px;">+ Ajouter une pièce</button>
     <div class="sheet-actions"><button class="btn-secondary" id="ok-btn" style="width:100%;">Fermer</button></div>
   `);
   document.getElementById("ok-btn").onclick = () => { closeSheet(); if (state.view === "accueil") render(); };
-  document.querySelectorAll(".piece-confirm").forEach((b) => {
+  document.querySelectorAll("#pieces-tabs button").forEach((b) => { b.onclick = () => { piecesFilter = b.dataset.val; openPiecesSheet(); }; });
+  document.getElementById("piece-add-btn").onclick = () => openPieceAddSheet();
+
+  const changeStatus = async (id, dir) => {
+    const all = await loadCommandes();
+    const c = all.find((x) => x.id === id);
+    if (!c) return;
+    const i = PIECE_STATUTS.findIndex((x) => x.key === c.statut);
+    const target = PIECE_STATUTS[i + dir];
+    if (!target) return;
+    c.statut = target.key;
+    const today = toISO(new Date());
+    if (dir > 0) { if (target.key === "commande") c.commandeLe = today; if (target.key === "receptionne") c.receptionneLe = today; if (target.key === "livre") c.livreLe = today; }
+    await saveCommandes(all);
+    toast(`Pièce : ${target.label}`);
+    piecesFilter = target.key;
+    openPiecesSheet();
+  };
+  document.querySelectorAll(".piece-next").forEach((b) => { b.onclick = () => changeStatus(b.dataset.id, 1); });
+  document.querySelectorAll(".piece-prev").forEach((b) => { b.onclick = () => changeStatus(b.dataset.id, -1); });
+  document.querySelectorAll(".piece-del").forEach((b) => {
     b.onclick = async () => {
-      const rdv = (await DB.listRendezvous()).find((x) => x.id === b.dataset.rdv);
-      if (!rdv) return;
-      const p = (rdv.pieces || []).find((x) => x.id === b.dataset.piece);
-      if (p) { p.confirmee = true; p.confirmeeLe = toISO(new Date()); await DB.saveRendezvous(rdv); }
-      toast("Commande confirmée");
+      if (!confirm("Supprimer cette pièce de la liste ?")) return;
+      await saveCommandes((await loadCommandes()).filter((x) => x.id !== b.dataset.id));
       openPiecesSheet();
     };
   });
+}
+
+// Ajout manuel (appel téléphonique, etc.) : choix de la fiche client + nom de la pièce.
+async function openPieceAddSheet() {
+  const clients = await DB.listClients();
+  let selected = null;
+  openSheet(`
+    <h2>Ajouter une pièce</h2>
+    <div class="form-row"><label>Pièce</label><input type="text" id="pa-nom" placeholder="Ex : joint de porte, bougie…" /></div>
+    <div class="form-row">
+      <label>Client concerné</label>
+      <div id="pa-selected" class="client-picker-selected"></div>
+      <input type="text" id="pa-search" placeholder="Rechercher un client…" />
+      <div id="pa-results" class="client-picker-results"></div>
+    </div>
+    <div class="sheet-actions">
+      <button class="btn-secondary" id="pa-cancel">Annuler</button>
+      <button class="btn-primary" id="pa-save">Ajouter</button>
+    </div>
+  `);
+  const resEl = document.getElementById("pa-results");
+  const selEl = document.getElementById("pa-selected");
+  function showSelected() {
+    if (!selected) { selEl.innerHTML = ""; return; }
+    const mm = [selected.marque, selected.modele].filter(Boolean).join(" ");
+    selEl.innerHTML = `<div class="info-block" style="margin:6px 0;"><strong>${escapeHtml(clientFullName(selected))}</strong><div class="near-hint">${mm ? escapeHtml(mm) : "Marque / modèle non renseignés"}${selected.adresse ? " — " + escapeHtml(selected.adresse) : ""}</div></div>`;
+  }
+  document.getElementById("pa-search").oninput = (e) => {
+    const q = e.target.value.trim().toLowerCase();
+    if (!q) { resEl.innerHTML = ""; return; }
+    const found = clients.filter((c) => (clientFullName(c) || "").toLowerCase().includes(q) || (c.adresse || "").toLowerCase().includes(q)).slice(0, 8);
+    resEl.innerHTML = found.map((c) => `<button type="button" class="client-result" data-id="${c.id}">${escapeHtml(clientFullName(c))}<span class="sub"> ${escapeHtml(c.adresse || "")}</span></button>`).join("") || `<p class="near-hint">Aucun client trouvé.</p>`;
+    resEl.querySelectorAll("[data-id]").forEach((b) => {
+      b.onclick = () => { selected = clients.find((c) => c.id === b.dataset.id); resEl.innerHTML = ""; e.target.value = ""; showSelected(); };
+    });
+  };
+  document.getElementById("pa-cancel").onclick = () => openPiecesSheet();
+  document.getElementById("pa-save").onclick = async () => {
+    const nom = document.getElementById("pa-nom").value.trim();
+    if (!nom) { toast("Indique la pièce à commander"); return; }
+    if (!selected) { toast("Sélectionne le client concerné"); return; }
+    const all = await loadCommandes();
+    all.push({ id: uid(), nom, clientId: selected.id, rdvId: null, delaiJours: null, statut: "a_commander", creeLe: toISO(new Date()) });
+    await saveCommandes(all);
+    piecesFilter = "a_commander";
+    toast("Pièce ajoutée");
+    openPiecesSheet();
+  };
 }
 
 // ---------- Récapitulatif RDV honorés (facturation) ----------
@@ -1592,6 +1774,7 @@ async function buildBackupPayload() {
     clients: await DB.listClients(),
     rendezvous: await DB.listRendezvous(),
     interventions: (await Promise.all((await DB.listClients()).map((c) => DB.listInterventionsForClient(c.id)))).flat(),
+    commandes: await loadCommandes(),
     exportedAt: new Date().toISOString(),
   };
 }
@@ -1623,6 +1806,11 @@ async function runCloudImport(fileId) {
     for (const c of data.clients || []) await DB.saveClient(c);
     for (const r of data.rendezvous || []) await DB.saveRendezvous(r);
     for (const i of data.interventions || []) await DB.saveIntervention(i);
+    if (data.commandes) {
+      const cur = await loadCommandes();
+      const ids = new Set(cur.map((c) => c.id));
+      await saveCommandes([...cur, ...data.commandes.filter((c) => !ids.has(c.id))]);
+    }
     return { ok: true };
   } catch (e) {
     return { ok: false, error: e.message };
@@ -2160,6 +2348,8 @@ async function confirmSnapshotRestore(fileId, label) {
     await DB.clearClients();
     await DB.clearRendezvous();
     await DB.clearInterventions();
+    await DB.setParam("commandes", []);
+    await DB.setParam("commandesMigrated", true);
     toast("Restauration en cours…");
     const r = await runCloudImport(fileId);
     toast(r.ok ? "Instantané restauré ✓" : "Échec de la restauration : " + r.error);
@@ -3051,43 +3241,8 @@ async function openRdvForm(prefill = {}, existing) {
   });
 
   // ---------- Pièces à commander ----------
-  let pieces = (r.pieces || []).map((p) => ({ ...p }));
-  function renderPiecesEditor() {
-    const el = document.getElementById("f-pieces");
-    el.innerHTML = pieces.map((p, i) => {
-      const preset = PIECE_DELAIS.some((d) => d.jours === p.delaiJours);
-      return `
-      <div class="piece-row" data-idx="${i}">
-        <input type="text" class="piece-nom" value="${escapeAttr(p.nom)}" placeholder="Ex : joint de porte, bougie…" />
-        <div class="piece-line2">
-          <select class="piece-delai">
-            ${PIECE_DELAIS.map((d) => `<option value="${d.jours}" ${p.delaiJours === d.jours ? "selected" : ""}>Commander ${d.label} avant</option>`).join("")}
-            <option value="custom" ${preset ? "" : "selected"}>Autre délai (jours)…</option>
-          </select>
-          <input type="text" inputmode="numeric" class="piece-jours" value="${preset ? "" : escapeAttr(String(p.delaiJours))}" placeholder="jours" ${preset ? "hidden" : ""} />
-          <button type="button" class="ma-remove piece-remove" aria-label="Retirer">✕</button>
-        </div>
-        ${p.confirmee ? `<div class="piece-ok">✓ Commande confirmée</div>` : ""}
-      </div>`;
-    }).join("");
-    el.querySelectorAll(".piece-row").forEach((row) => {
-      const i = parseInt(row.dataset.idx, 10);
-      const sel = row.querySelector(".piece-delai");
-      const jours = row.querySelector(".piece-jours");
-      row.querySelector(".piece-nom").oninput = (e) => { pieces[i].nom = e.target.value; };
-      sel.onchange = () => {
-        if (sel.value === "custom") { jours.hidden = false; jours.focus(); }
-        else { jours.hidden = true; pieces[i].delaiJours = parseInt(sel.value, 10); }
-      };
-      jours.oninput = () => { const n = parseInt(jours.value, 10); if (n >= 0) pieces[i].delaiJours = n; };
-      row.querySelector(".piece-remove").onclick = () => { pieces.splice(i, 1); renderPiecesEditor(); };
-    });
-  }
-  document.getElementById("add-piece-btn").onclick = () => {
-    pieces.push({ id: uid(), nom: "", delaiJours: 14, confirmee: false });
-    renderPiecesEditor();
-  };
-  renderPiecesEditor();
+  const existingPieces = existing ? (await loadCommandes()).filter((c) => c.rdvId === existing.id) : [];
+  const piecesEditor = createPiecesEditor(document.getElementById("f-pieces"), document.getElementById("add-piece-btn"), existingPieces, true);
 
   document.getElementById("cancel-btn").onclick = closeSheet;
   document.getElementById("save-btn").onclick = async () => {
@@ -3104,9 +3259,9 @@ async function openRdvForm(prefill = {}, existing) {
       adresse: client.adresse,
       commentaire: document.getElementById("f-comment").value.trim(),
       ordre: r.ordre ?? Date.now(),
-      pieces: pieces.filter((p) => p.nom.trim()).map((p) => ({ ...p, nom: p.nom.trim() })),
     };
     await DB.saveRendezvous(item);
+    await savePiecesForRdv(item, piecesEditor.getList(), true);
     closeSheet();
     if (existing) {
       toast("Rendez-vous mis à jour");
@@ -3358,6 +3513,11 @@ async function openHonoreForm(r, client) {
     <div class="info-block">
       <h3>Compte-rendu d'intervention</h3>
       <div class="form-row">
+        <label>Pièce à commander pour ce client (facultatif)</label>
+        <div id="f-pieces"></div>
+        <button type="button" class="btn-secondary" id="add-piece-btn" style="width:100%;margin-top:6px;">+ Ajouter une pièce à commander</button>
+      </div>
+      <div class="form-row">
         <label>Compte-rendu (facultatif)</label>
         <textarea id="f-compte-rendu" placeholder="Ex : prévoir changement moteur, joint de porte à revoir...">${escapeHtml(r.compteRendu || "")}</textarea>
       </div>
@@ -3560,6 +3720,9 @@ async function openHonoreForm(r, client) {
 
   renderDetails();
 
+  const honorePiecesEditor = createPiecesEditor(document.getElementById("f-pieces"), document.getElementById("add-piece-btn"),
+    (await loadCommandes()).filter((c) => c.rdvId === r.id), false);
+
   function renderHonorePhotosGrid() {
     document.getElementById("honore-photos-grid").innerHTML = photoGridHtml(honorePhotos, true);
     photoDeleters["honore-photos-grid"] = (idx) => {
@@ -3610,6 +3773,7 @@ async function openHonoreForm(r, client) {
       description: [...formatMontantLines(montant), ...formatPaiementLines(paiement)].join(" / "),
       photos: honorePhotos,
     });
+    await savePiecesForRdv(r, honorePiecesEditor.getList(), false);
     r.statut = "honore";
     r.montant = montant;
     r.paiement = paiement;
